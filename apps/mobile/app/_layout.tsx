@@ -114,6 +114,10 @@ export default function RootLayout() {
         {/* Detail screens — hidden from tab bar */}
         <Tabs.Screen name="post/[id]" options={{ href: null, headerShown: true, title: "Post" }} />
         <Tabs.Screen
+          name="mini-app/[id]"
+          options={{ href: null, headerShown: true, title: "Mini App" }}
+        />
+        <Tabs.Screen
           name="profile/[address]"
           options={{ href: null, headerShown: true, title: "Profile" }}
         />

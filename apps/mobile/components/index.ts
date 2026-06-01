@@ -5,3 +5,5 @@ export { SearchBar } from "./SearchBar";
 export { ProfileRow } from "./ProfileRow";
 export { PoolRow } from "./PoolRow";
 export { WalletButton } from "./WalletButton";
+export { MiniAppIcon } from "./MiniAppIcon";
+export type { MiniApp } from "./MiniAppIcon";
