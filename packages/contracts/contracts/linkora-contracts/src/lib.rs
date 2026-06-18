@@ -10,14 +10,23 @@ use soroban_sdk::{
 pub enum StorageKey {
     Post(u64),                 // persistent: post_id -> Post
     Profile(Address),          // persistent: user -> Profile
-    Following(Address),        // persistent: user -> Vec<Address> of accounts they follow
-    Followers(Address),        // persistent: user -> Vec<Address> of accounts following them
+    Following(Address),        // persistent: user -> Vec<Address> (LEGACY — kept for migration)
+    Followers(Address),        // persistent: user -> Vec<Address> (LEGACY — kept for migration)
     Pool(Symbol),              // persistent: pool_id -> Pool
     Like(u64, Address),        // persistent: (post_id, user) -> bool
     AuthorPosts(Address),      // persistent: author -> Vec<u64> of post IDs
     Blocks(Address),           // persistent: blocker -> Map<Address, ()>
     UsernameIndex(String), // persistent: username -> owner Address (reverse index for uniqueness)
     TipCooldown(u64, Address), // temporary: (post_id, tipper) -> last-tip ledger sequence number
+    // ── Adjacency-set social graph (ADR-001) ──────────────────────────────
+    Edge(Address, Address),         // persistent: (follower, followee) -> bool
+    FollowingCount(Address),        // persistent: user -> u32 total following count
+    FollowersCount(Address),        // persistent: user -> u32 total follower count
+    FollowingIdx(Address, u32),     // persistent: (user, seq) -> Address (ordered index)
+    FollowersIdx(Address, u32),     // persistent: (user, seq) -> Address (ordered index)
+    FollowingPos(Address, Address), // persistent: (follower, followee) -> u32 position in idx
+    FollowersPos(Address, Address), // persistent: (followee, follower) -> u32 position in idx
+    GraphMigrated(Address),         // persistent: user -> bool (migration tracking)
 }
 
 // ── Instance-storage key constants (small scalars, not contracttype) ──────────
