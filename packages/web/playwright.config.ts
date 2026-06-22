@@ -24,11 +24,22 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: 'http://localhost:3000',
+    baseURL: 'http://localhost:3977',
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
     /* Screenshot on failure */
     screenshot: 'only-on-failure',
+    /* Mock Freighter extension APIs */
+    initScript: `
+      window.freighterApi = {
+        getPublicKey: async () => ({ publicKey: 'GBSIBPRUU5B3R6P7NFLGSHACVZFW37K46RUO3RVXQB4AIEI6UADWGV2V' }),
+        isConnected: async () => true,
+        onNetworkChange: () => {},
+      };
+      window.freighter = {
+        getPublicKey: async () => 'GBSIBPRUU5B3R6P7NFLGSHACVZFW37K46RUO3RVXQB4AIEI6UADWGV2V',
+      };
+    `,
   },
 
   /* Configure projects for major browsers */
@@ -61,9 +72,9 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: 'pnpm dev',
-    url: 'http://localhost:3000',
-    reuseExistingServer: !process.env['CI'],
+    command: 'pnpm dev -p 3977',
+    url: 'http://localhost:3977',
+    reuseExistingServer: false,
     timeout: 120 * 1000,
   },
 });
