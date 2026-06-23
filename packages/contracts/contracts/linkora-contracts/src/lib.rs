@@ -706,7 +706,7 @@ impl LinkoraContract {
             if !env.storage().persistent().has(k) {
                 panic!("graph entry expired — pay rent");
             }
-            #[cfg(any(test, feature = "testutils"))]
+            #[cfg(test)]
             {
                 let ttl = env.storage().persistent().get_ttl(k);
                 if ttl <= LEDGER_THRESHOLD {
@@ -1874,7 +1874,7 @@ impl LinkoraContract {
         let keys = Self::get_user_keys(&env, &user);
         for key in keys.iter() {
             if env.storage().persistent().has(&key) {
-                #[cfg(any(test, feature = "testutils"))]
+                #[cfg(test)]
                 {
                     let current_ttl = env.storage().persistent().get_ttl(&key);
                     let new_ttl = current_ttl.saturating_add(ledgers_to_extend as u32);
@@ -1882,7 +1882,7 @@ impl LinkoraContract {
                         .persistent()
                         .extend_ttl(&key, new_ttl, new_ttl);
                 }
-                #[cfg(not(any(test, feature = "testutils")))]
+                #[cfg(not(test))]
                 {
                     let target_ttl = LEDGER_BUMP.saturating_add(ledgers_to_extend as u32);
                     env.storage()
@@ -1894,7 +1894,7 @@ impl LinkoraContract {
 
         let extended_to_ledger = Self::get_rent_expiry(env.clone(), user.clone());
         RentPaidEvent {
-            user,
+            user: user.clone(),
             payer: user,
             token,
             amount,
@@ -1904,7 +1904,7 @@ impl LinkoraContract {
     }
 
     pub fn get_rent_expiry(env: Env, user: Address) -> u32 {
-        #[cfg(any(test, feature = "testutils"))]
+        #[cfg(test)]
         {
             let keys = Self::get_user_keys(&env, &user);
             let mut min_ttl = u32::MAX;
@@ -1926,7 +1926,7 @@ impl LinkoraContract {
 
             env.ledger().sequence().saturating_add(min_ttl)
         }
-        #[cfg(not(any(test, feature = "testutils")))]
+        #[cfg(not(test))]
         {
             let profile_key = StorageKey::Profile(user);
             if !env.storage().persistent().has(&profile_key) {
@@ -1958,7 +1958,7 @@ impl LinkoraContract {
                 break;
             }
             if env.storage().persistent().has(&key) {
-                #[cfg(any(test, feature = "testutils"))]
+                #[cfg(test)]
                 {
                     let ttl = env.storage().persistent().get_ttl(&key);
                     if ttl <= LEDGER_THRESHOLD {
@@ -1966,7 +1966,7 @@ impl LinkoraContract {
                         bumped += 1;
                     }
                 }
-                #[cfg(not(any(test, feature = "testutils")))]
+                #[cfg(not(test))]
                 {
                     Self::bump(&env, &key);
                     bumped += 1;
