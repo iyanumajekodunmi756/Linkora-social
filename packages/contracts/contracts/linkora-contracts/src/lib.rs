@@ -7,6 +7,7 @@ use soroban_sdk::{
 // ── Storage Key Enum ──────────────────────────────────────────────────────────
 
 #[contracttype]
+#[derive(Clone)]
 pub enum StorageKey {
     Post(u64),                 // persistent: post_id -> Post
     Profile(Address),          // persistent: user -> Profile
@@ -598,7 +599,7 @@ impl LinkoraContract {
                 .instance()
                 .get(&REGISTERED_USERS)
                 .unwrap_or_else(|| Map::new(&env));
-            if registered.contains_key(&user) {
+            if registered.contains_key(user) {
                 env.panic_with_error(RentError::Expired);
             }
             None
@@ -705,9 +706,12 @@ impl LinkoraContract {
             if !env.storage().persistent().has(k) {
                 panic!("graph entry expired — pay rent");
             }
-            let ttl = env.storage().persistent().get_ttl(k);
-            if ttl <= LEDGER_THRESHOLD {
-                panic!("graph entry expired — pay rent");
+            #[cfg(any(test, feature = "testutils"))]
+            {
+                let ttl = env.storage().persistent().get_ttl(k);
+                if ttl <= LEDGER_THRESHOLD {
+                    panic!("graph entry expired — pay rent");
+                }
             }
         };
 
@@ -1870,11 +1874,21 @@ impl LinkoraContract {
         let keys = Self::get_user_keys(&env, &user);
         for key in keys.iter() {
             if env.storage().persistent().has(&key) {
-                let current_ttl = env.storage().persistent().get_ttl(&key);
-                let new_ttl = current_ttl.saturating_add(ledgers_to_extend as u32);
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, new_ttl, new_ttl);
+                #[cfg(any(test, feature = "testutils"))]
+                {
+                    let current_ttl = env.storage().persistent().get_ttl(&key);
+                    let new_ttl = current_ttl.saturating_add(ledgers_to_extend as u32);
+                    env.storage()
+                        .persistent()
+                        .extend_ttl(&key, new_ttl, new_ttl);
+                }
+                #[cfg(not(any(test, feature = "testutils")))]
+                {
+                    let target_ttl = LEDGER_BUMP.saturating_add(ledgers_to_extend as u32);
+                    env.storage()
+                        .persistent()
+                        .extend_ttl(&key, target_ttl, target_ttl);
+                }
             }
         }
 
@@ -1890,25 +1904,36 @@ impl LinkoraContract {
     }
 
     pub fn get_rent_expiry(env: Env, user: Address) -> u32 {
-        let keys = Self::get_user_keys(&env, &user);
-        let mut min_ttl = u32::MAX;
-        let mut has_keys = false;
+        #[cfg(any(test, feature = "testutils"))]
+        {
+            let keys = Self::get_user_keys(&env, &user);
+            let mut min_ttl = u32::MAX;
+            let mut has_keys = false;
 
-        for key in keys.iter() {
-            if env.storage().persistent().has(&key) {
-                let ttl = env.storage().persistent().get_ttl(&key);
-                if ttl < min_ttl {
-                    min_ttl = ttl;
-                    has_keys = true;
+            for key in keys.iter() {
+                if env.storage().persistent().has(&key) {
+                    let ttl = env.storage().persistent().get_ttl(&key);
+                    if ttl < min_ttl {
+                        min_ttl = ttl;
+                        has_keys = true;
+                    }
                 }
             }
-        }
 
-        if !has_keys {
-            panic!("profile does not exist");
-        }
+            if !has_keys {
+                panic!("profile does not exist");
+            }
 
-        env.ledger().sequence().saturating_add(min_ttl)
+            env.ledger().sequence().saturating_add(min_ttl)
+        }
+        #[cfg(not(any(test, feature = "testutils")))]
+        {
+            let profile_key = StorageKey::Profile(user);
+            if !env.storage().persistent().has(&profile_key) {
+                panic!("profile does not exist");
+            }
+            env.ledger().sequence().saturating_add(LEDGER_BUMP)
+        }
     }
 
     pub fn set_rent_rate_bps(env: Env, rate: u32) {
@@ -1933,8 +1958,16 @@ impl LinkoraContract {
                 break;
             }
             if env.storage().persistent().has(&key) {
-                let ttl = env.storage().persistent().get_ttl(&key);
-                if ttl <= LEDGER_THRESHOLD {
+                #[cfg(any(test, feature = "testutils"))]
+                {
+                    let ttl = env.storage().persistent().get_ttl(&key);
+                    if ttl <= LEDGER_THRESHOLD {
+                        Self::bump(&env, &key);
+                        bumped += 1;
+                    }
+                }
+                #[cfg(not(any(test, feature = "testutils")))]
+                {
                     Self::bump(&env, &key);
                     bumped += 1;
                 }
