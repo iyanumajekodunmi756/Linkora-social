@@ -3252,6 +3252,11 @@ fn test_profile_expiry_detection() {
     // Profile should be retrievable initially
     assert!(client.get_profile(&user).is_some());
 
+    // Extend instance storage TTL so it doesn't expire when sequence is advanced
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(100_000, 20_000_000);
+    });
+
     // Advance ledger sequence past the maximum possible TTL (6,312,000)
     env.ledger().with_mut(|li| {
         li.sequence_number += 10_000_000;
