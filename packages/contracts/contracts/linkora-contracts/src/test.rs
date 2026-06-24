@@ -3244,7 +3244,7 @@ fn test_moderation_happy_path_uphold() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (client, admin, treasury) = setup_contract(&env);
+    let (client, admin, _treasury) = setup_contract(&env);
 
     // Create the moderator pool with M-of-N signatures (2-of-2)
     let pool_admin1 = Address::generate(&env);
@@ -3261,7 +3261,6 @@ fn test_moderation_happy_path_uphold() {
 
     // Create author creator token and profile
     let creator_token = setup_token(&env, &author);
-    StellarAssetClient::new(&env, &creator_token).mint(&author, &10000);
     client.set_profile(&author, &String::from_str(&env, "author"), &creator_token);
 
     // Approve Linkora contract to burn creator token from author

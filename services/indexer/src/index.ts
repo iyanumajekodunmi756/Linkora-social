@@ -18,6 +18,9 @@
  *   MIN_POLL_INTERVAL_MS    - (optional) adaptive poll floor, default 100
  *   MAX_POLL_INTERVAL_MS    - (optional) adaptive poll ceiling, default 5000
  */
+/**
+ * Linkora Indexer — entry point.
+ */
 
 import http from "http";
 import { Pool } from "pg";
@@ -90,6 +93,7 @@ async function ensureSchema(): Promise<void> {
       computed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
   await pgPool.query(`
     CREATE TABLE IF NOT EXISTS device_tokens (
       id         SERIAL      PRIMARY KEY,
@@ -149,7 +153,7 @@ const httpServer = http.createServer(apiApp);
 const wsHandle = attachWebSocketServer(httpServer, bus, { path: "/ws" });
 const detachNotificationDispatcher = attachNotificationDispatcher(bus, pgPool, notificationService);
 
-// ── Graceful shutdown ─────────────────────────────────────────────────────────
+// ── Lifecycle control ────────────────────────────────────────────────────────
 
 const abortController = new AbortController();
 let shuttingDown = false;
@@ -169,7 +173,7 @@ async function shutdown(signal: string): Promise<void> {
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Core runner ──────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   console.log("[indexer] Starting Linkora indexer");
