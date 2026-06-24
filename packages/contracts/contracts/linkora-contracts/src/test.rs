@@ -3274,7 +3274,6 @@ fn test_profile_expiry_detection() {
     }
 }
 
-
 #[test]
 fn test_pay_rent_extends_ttl() {
     let env = Env::default();
