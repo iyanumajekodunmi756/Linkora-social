@@ -1850,7 +1850,7 @@ impl LinkoraContract {
         assert!(stake_amount > 0, "stake amount must be positive");
         token::Client::new(&env, &token).transfer(
             &reporter,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &stake_amount,
         );
 

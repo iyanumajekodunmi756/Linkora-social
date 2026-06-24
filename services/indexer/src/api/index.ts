@@ -1,7 +1,9 @@
 import express, { Request, Response, NextFunction } from "express";
-import rateLimit from "express-rate-limit";
 import { Pool as PgPool } from "pg";
 import { Database } from "../db";
+import { logger } from "../logger";
+import { rateLimitRead, rateLimitWrite } from "../middleware/rateLimit";
+import { requireStellarAuth } from "../middleware/stellarAuth";
 import { createProfilesRouter } from "./routes/profiles";
 import { createPostsRouter } from "./routes/posts";
 import { createFollowsRouter } from "./routes/follows";
@@ -15,38 +17,6 @@ import {
   PostgresDeviceTokenStore,
 } from "../notifications/service";
 import { PostgresDatabase } from "../postgres-db";
-
-// ── Rate-limit configuration (all values are env-overridable) ────────────────
-
-const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? "60000", 10);
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX ?? "100", 10);
-
-// ── Rate limiter middleware ───────────────────────────────────────────────────
-
-const apiLimiter = rateLimit({
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  max: RATE_LIMIT_MAX,
-  standardHeaders: "draft-7", // Sends RateLimit-* headers (RFC 9110 draft-7)
-  legacyHeaders: false,
-  keyGenerator: (req: Request): string => {
-    // Respect X-Forwarded-For when running behind a trusted reverse proxy.
-    // In production, set `app.set("trust proxy", 1)` and ensure only your
-    // load-balancer can set this header.
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string") {
-      return forwarded.split(",")[0].trim();
-    }
-    return req.ip ?? "unknown";
-  },
-  handler: (req: Request, res: Response): void => {
-    const retryAfter = Math.ceil(RATE_LIMIT_WINDOW_MS / 1000);
-    res.status(429).set("Retry-After", String(retryAfter)).json({
-      error: "Too many requests. Please retry after the indicated delay.",
-      code: "RATE_LIMIT_EXCEEDED",
-      retryAfterSeconds: retryAfter,
-    });
-  },
-});
 
 // ── App factory ───────────────────────────────────────────────────────────────
 
@@ -119,8 +89,10 @@ export function createApp(db: Database, pg?: PgPool): express.Application {
   const DEFAULT_LIMIT = 20;
   const DEFAULT_OFFSET = 0;
 
+  // Override: search uses read-rate-limit even though it's POST
   app.post(
     "/api/search/posts",
+    rateLimitRead,
     (req: Request, res: Response<SearchResponse | ErrorResponse>): void => {
       const body = req.body as Partial<SearchQuery>;
 
@@ -162,26 +134,64 @@ export function createApp(db: Database, pg?: PgPool): express.Application {
     }
   );
 
-  // ── Error handler ─────────────────────────────────────────────────────────────
+  // ── DM relay endpoint (write — requires Stellar auth + write rate limit) ───
+
+  interface MessagePayload {
+    recipientAddress: string;
+    encryptedContent: string;
+  }
+
+  app.post(
+    "/api/messages",
+    requireStellarAuth,
+    rateLimitWrite,
+    (req: Request, res: Response): void => {
+      const body = req.body as Partial<MessagePayload>;
+
+      if (typeof body.recipientAddress !== "string" || body.recipientAddress.trim() === "") {
+        res.status(400).json({ error: "recipientAddress is required", code: "INVALID_PAYLOAD" });
+        return;
+      }
+
+      if (typeof body.encryptedContent !== "string" || body.encryptedContent.trim() === "") {
+        res.status(400).json({ error: "encryptedContent is required", code: "INVALID_PAYLOAD" });
+        return;
+      }
+
+      // TODO: persist and relay DM via Stellar contract.
+      res.status(202).json({
+        status: "accepted",
+        from: req.context?.stellarAddress,
+        to: body.recipientAddress,
+      });
+    }
+  );
+
+  // ── Error handler ─────────────────────────────────────────────────────────
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void => {
-    console.error(err);
+  app.use((err: Error, req: Request, res: Response, _next: NextFunction): void => {
+    logger.error(
+      {
+        requestId: req.context?.requestId,
+        error: err.message,
+        stack: err.stack,
+      },
+      "Unhandled error"
+    );
     res.status(500).json({ error: "Internal server error", code: "INTERNAL_ERROR" });
   });
 
   return app;
 }
 
-// Back-compat: export a pre-built app and limiter for tests that import them directly.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const _stub = {} as any;
-export const app = createApp(_stub);
-export { apiLimiter };
-
 // ── Server bootstrap (skipped when imported in tests) ────────────────────────
 
 if (require.main === module) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { Pool } = require("pg") as typeof import("pg");
+  const DATABASE_URL = process.env.DATABASE_URL ?? "";
+  const _stub = new Pool({ connectionString: DATABASE_URL }) as unknown as Database;
   const PORT = parseInt(process.env.PORT ?? "3001", 10);
   const databaseUrl = process.env.DATABASE_URL;
   const pg = databaseUrl ? new PgPool({ connectionString: databaseUrl }) : undefined;
