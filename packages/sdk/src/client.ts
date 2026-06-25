@@ -3,20 +3,21 @@ import {
   Contract,
   nativeToScVal,
   scValToNative,
+  Transaction,
   TransactionBuilder,
   Account,
   Keypair,
   xdr,
 } from "@stellar/stellar-sdk";
-import { Profile, Post, Pool, SimulationResult, Signer, LedgerFootprint } from "./types";
+import { GeneratedLinkoraClient } from "./generated/client";
+import { Profile, Post, Pool, SimulationResult, LedgerFootprint } from "./types";
 import { mapError, NotFoundError, SimulationError } from "./errors";
+import type { GovParameter, GovProposal } from "./generated/types";
 
 const { isSimulationError, isSimulationSuccess } = rpc.Api;
 
 const DEFAULT_NETWORK = "Test SDF Network ; September 2015";
 const DEFAULT_TIMEOUT = 30;
-
-const { isSimulationError, isSimulationSuccess } = rpc.Api;
 
 function scvAddress(value: string): xdr.ScVal {
   return nativeToScVal(value, { type: "address" });
@@ -31,9 +32,6 @@ function scvI128(value: number | bigint): xdr.ScVal {
   return nativeToScVal(value, { type: "i128" });
 }
 
-/**
- * Configuration options for the SDK client
- */
 export interface ClientConfig {
   contractId: string;
   rpcUrl: string;
@@ -42,9 +40,6 @@ export interface ClientConfig {
   tokenFactoryId?: string;
 }
 
-/**
- * Parameters for deploying a creator token via the factory.
- */
 export interface DeployCreatorTokenParams {
   deployer: string;
   name: string;
@@ -53,202 +48,11 @@ export interface DeployCreatorTokenParams {
   initialSupply: bigint;
 }
 
-  /**
-   * Simulate a write operation and return fee and footprint information.
-   * @param method The contract method name
-   * @param args The method arguments as xdr.ScVal
-   * @returns SimulationResult with success status, resource fee, and footprint
-   * @throws SimulationError if simulation fails with diagnostic info
-   */
-  async simulate(method: string, ...args: xdr.ScVal[]): Promise<SimulationResult> {
-    const server = new rpc.Server(this.rpcUrl);
-    const contract = new Contract(this.contractId);
-    const op = contract.call(method, ...args);
-
-    const source = Keypair.random();
-    const account = new Account(source.publicKey(), "0");
-    const tx = new TransactionBuilder(account, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(op)
-      .setTimeout(DEFAULT_TIMEOUT)
-      .build();
-
-    const result = await server.simulateTransaction(tx);
-
-    if (isSimulationError(result)) {
-      throw new SimulationError(
-        `Transaction simulation failed: ${result.error}`,
-        result.events,
-        result.error
-      );
-    }
-
-    if (!isSimulationSuccess(result) || !result.result) {
-      throw new SimulationError("Unknown simulation error", undefined, result);
-    }
-
-    // Extract resource fee from the result
-    const resourceFee = result.result.minResourceFee || "0";
-    
-    // Build footprint from result
-    let footprint: LedgerFootprint | undefined;
-    if (result.result.sorobanData) {
-      const sorobanData = result.result.sorobanData;
-      footprint = {
-        readOnly: sorobanData.resources?.footprint?.readOnly?.map((entry) => JSON.stringify(entry)) || [],
-        readWrite: sorobanData.resources?.footprint?.readWrite?.map((entry) => JSON.stringify(entry)) || [],
-      };
-    }
-
-    return {
-      success: true,
-      resourceFee,
-      footprint,
-    };
-  }
-
-  /**
-   * Prepare a transaction for signing by simulating it, injecting fees and footprint.
-   * @param method The contract method name
-   * @param sourceAccount The Account object for the transaction source
-   * @param args The method arguments as xdr.ScVal
-   * @returns A fully prepared, unsigned Transaction ready for signing
-   * @throws SimulationError if simulation fails
-   */
-  async prepareTransaction(
-    method: string,
-    sourceAccount: Account,
-    ...args: xdr.ScVal[]
-  ): Promise<any> {
-    const server = new rpc.Server(this.rpcUrl);
-    const contract = new Contract(this.contractId);
-    const op = contract.call(method, ...args);
-
-    // First, build and simulate a temporary tx to get fees
-    const tempSource = Keypair.random();
-    const tempAccount = new Account(tempSource.publicKey(), "0");
-    const tempTx = new TransactionBuilder(tempAccount, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(op)
-      .setTimeout(DEFAULT_TIMEOUT)
-      .build();
-
-    const simulationResult = await server.simulateTransaction(tempTx);
-
-    if (isSimulationError(simulationResult)) {
-      throw new SimulationError(
-        `Transaction preparation failed: ${simulationResult.error}`,
-        simulationResult.events,
-        simulationResult.error
-      );
-    }
-
-    if (!isSimulationSuccess(simulationResult) || !simulationResult.result) {
-      throw new SimulationError("Unknown simulation error during transaction preparation", undefined, simulationResult);
-    }
-
-    // Extract resource fee and soroban data from simulation
-    const resourceFee = simulationResult.result.minResourceFee || "0";
-    const sorobanData = simulationResult.result.sorobanData;
-
-    // Now build the real transaction with the source account and inject soroban data
-    let builder = new TransactionBuilder(sourceAccount, {
-      fee: String(Number(resourceFee) + 100), // Add base fee to resource fee
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(op)
-      .setTimeout(DEFAULT_TIMEOUT);
-
-    // Set soroban data if available
-    if (sorobanData) {
-      builder = builder.setSorobanData(sorobanData);
-    }
-
-    return builder.build();
-  }
-
-  /**
-   * Build a multi-operation transaction with multiple Soroban invocations.
-   * Simulates the bundle and injects correct fees.
-   * @param sourceAccount The Account object for the transaction source
-   * @param ops Array of operations, each with method name and arguments
-   * @returns A fully prepared, unsigned Transaction with multiple operations
-   * @throws SimulationError if simulation fails on any operation
-   */
-  async buildMultiOpTx(
-    sourceAccount: Account,
-    ops: Array<{ method: string; args: xdr.ScVal[] }>
-  ): Promise<any> {
-    const server = new rpc.Server(this.rpcUrl);
-    const contract = new Contract(this.contractId);
-
-    // Build temporary transaction to simulate all operations together
-    const tempSource = Keypair.random();
-    const tempAccount = new Account(tempSource.publicKey(), "0");
-    let builder = new TransactionBuilder(tempAccount, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    });
-
-    // Add all operations
-    for (const op of ops) {
-      const operation = contract.call(op.method, ...op.args);
-      builder = builder.addOperation(operation);
-    }
-
-    const tempTx = builder.setTimeout(DEFAULT_TIMEOUT).build();
-
-    // Simulate the bundled transaction
-    const simulationResult = await server.simulateTransaction(tempTx);
-
-    if (isSimulationError(simulationResult)) {
-      throw new SimulationError(
-        `Multi-operation transaction simulation failed: ${simulationResult.error}`,
-        simulationResult.events,
-        simulationResult.error
-      );
-    }
-
-    if (!isSimulationSuccess(simulationResult) || !simulationResult.result) {
-      throw new SimulationError(
-        "Unknown simulation error during multi-op transaction preparation",
-        undefined,
-        simulationResult
-      );
-    }
-
-    // Extract resource fee and soroban data
-    const resourceFee = simulationResult.result.minResourceFee || "0";
-    const sorobanData = simulationResult.result.sorobanData;
-
-    // Build the real transaction with all operations
-    let realBuilder = new TransactionBuilder(sourceAccount, {
-      fee: String(Number(resourceFee) + 100), // Add base fee to resource fee
-      networkPassphrase: this.networkPassphrase,
-    });
-
-    for (const op of ops) {
-      const operation = contract.call(op.method, ...op.args);
-      realBuilder = realBuilder.addOperation(operation);
-    }
-
-    realBuilder = realBuilder.setTimeout(DEFAULT_TIMEOUT);
-
-    // Set soroban data if available
-    if (sorobanData) {
-      realBuilder = realBuilder.setSorobanData(sorobanData);
-    }
-
-    return realBuilder.build();
-  }
-
-  private buildTx(method: string, ...args: xdr.ScVal[]): string {
-    const contract = new Contract(this.contractId);
-    const op = contract.call(method, ...args);
+export interface SetProfileWithNewTokenParams {
+  user: string;
+  username: string;
+  tokenParams: Omit<DeployCreatorTokenParams, "deployer">;
+}
 
 /**
  * Typed client for all Linkora social contract methods.
@@ -272,6 +76,189 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     this.tokenFactoryId = config.tokenFactoryId;
     this._rpcUrl = config.rpcUrl;
     this._networkPassphrase = config.networkPassphrase || DEFAULT_NETWORK;
+  }
+
+  // ── Soroban simulation and transaction preparation ─────────────────────────
+
+  /**
+   * Simulate a write operation and return fee and footprint information.
+   * Uses a fresh op factory each call to avoid XDR object reuse across transactions.
+   */
+  async simulate(method: string, ...args: xdr.ScVal[]): Promise<SimulationResult> {
+    const server = new rpc.Server(this._rpcUrl);
+    const contract = new Contract(this._contractId);
+    const buildOp = () => contract.call(method, ...args);
+
+    const source = Keypair.random();
+    const account = new Account(source.publicKey(), "0");
+    const tx = new TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: this._networkPassphrase,
+    })
+      .addOperation(buildOp())
+      .setTimeout(DEFAULT_TIMEOUT)
+      .build();
+
+    const result = await server.simulateTransaction(tx);
+
+    if (isSimulationError(result)) {
+      throw new SimulationError(
+        `Transaction simulation failed: ${result.error}`,
+        result.events,
+        result.error
+      );
+    }
+
+    if (!isSimulationSuccess(result) || !result.result) {
+      throw new SimulationError("Unknown simulation error", undefined, result);
+    }
+
+    const resourceFee = result.minResourceFee || "0";
+
+    let footprint: LedgerFootprint = { readOnly: [], readWrite: [] };
+    if (result.transactionData) {
+      try {
+        const built = result.transactionData.build();
+        footprint = {
+          readOnly: built
+            .resources()
+            .footprint()
+            .readOnly()
+            .map((e: unknown) => JSON.stringify(e)),
+          readWrite: built
+            .resources()
+            .footprint()
+            .readWrite()
+            .map((e: unknown) => JSON.stringify(e)),
+        };
+      } catch {
+        // Keep empty footprint if structure extraction fails
+      }
+    }
+
+    return { success: true, resourceFee, footprint };
+  }
+
+  /**
+   * Prepare a transaction for signing by simulating it with a temp keypair, then
+   * building the real tx for sourceAccount with injected fees and footprint.
+   * The operation is built independently for each transaction to avoid XDR state sharing.
+   */
+  async prepareTransaction(
+    method: string,
+    sourceAccount: Account,
+    ...args: xdr.ScVal[]
+  ): Promise<Transaction> {
+    const server = new rpc.Server(this._rpcUrl);
+    const contract = new Contract(this._contractId);
+    const buildOp = () => contract.call(method, ...args);
+
+    const tempSource = Keypair.random();
+    const tempAccount = new Account(tempSource.publicKey(), "0");
+    const tempTx = new TransactionBuilder(tempAccount, {
+      fee: "100",
+      networkPassphrase: this._networkPassphrase,
+    })
+      .addOperation(buildOp())
+      .setTimeout(DEFAULT_TIMEOUT)
+      .build();
+
+    const simulationResult = await server.simulateTransaction(tempTx);
+
+    if (isSimulationError(simulationResult)) {
+      throw new SimulationError(
+        `Transaction preparation failed: ${simulationResult.error}`,
+        simulationResult.events,
+        simulationResult.error
+      );
+    }
+
+    if (!isSimulationSuccess(simulationResult) || !simulationResult.result) {
+      throw new SimulationError(
+        "Unknown simulation error during transaction preparation",
+        undefined,
+        simulationResult
+      );
+    }
+
+    const resourceFee = simulationResult.minResourceFee || "0";
+    const sorobanData = simulationResult.transactionData;
+
+    let builder = new TransactionBuilder(sourceAccount, {
+      fee: String(Number(resourceFee) + 100),
+      networkPassphrase: this._networkPassphrase,
+    })
+      .addOperation(buildOp())
+      .setTimeout(DEFAULT_TIMEOUT);
+
+    if (sorobanData) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      builder = (builder as any).setSorobanData(sorobanData);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (builder as any).build() as Transaction;
+  }
+
+  /**
+   * Build a multi-operation transaction with multiple Soroban invocations.
+   * Operations are freshly constructed for both the simulation and the real transaction
+   * to avoid XDR object reuse across different TransactionBuilder instances.
+   */
+  async buildMultiOpTx(
+    sourceAccount: Account,
+    ops: Array<{ method: string; args: xdr.ScVal[] }>
+  ): Promise<Transaction> {
+    const server = new rpc.Server(this._rpcUrl);
+    const contract = new Contract(this._contractId);
+
+    const tempSource = Keypair.random();
+    const tempAccount = new Account(tempSource.publicKey(), "0");
+    const tempBuilder = new TransactionBuilder(tempAccount, {
+      fee: "100",
+      networkPassphrase: this._networkPassphrase,
+    });
+    for (const op of ops) {
+      tempBuilder.addOperation(contract.call(op.method, ...op.args));
+    }
+    const tempTx = tempBuilder.setTimeout(DEFAULT_TIMEOUT).build();
+
+    const simulationResult = await server.simulateTransaction(tempTx);
+
+    if (isSimulationError(simulationResult)) {
+      throw new SimulationError(
+        `Multi-operation transaction simulation failed: ${simulationResult.error}`,
+        simulationResult.events,
+        simulationResult.error
+      );
+    }
+
+    if (!isSimulationSuccess(simulationResult) || !simulationResult.result) {
+      throw new SimulationError(
+        "Unknown simulation error during multi-op transaction preparation",
+        undefined,
+        simulationResult
+      );
+    }
+
+    const resourceFee = simulationResult.minResourceFee || "0";
+    const sorobanData = simulationResult.transactionData;
+
+    const realBuilder = new TransactionBuilder(sourceAccount, {
+      fee: String(Number(resourceFee) + 100),
+      networkPassphrase: this._networkPassphrase,
+    });
+    for (const op of ops) {
+      realBuilder.addOperation(contract.call(op.method, ...op.args));
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let readyBuilder: any = realBuilder.setTimeout(DEFAULT_TIMEOUT);
+
+    if (sorobanData) {
+      readyBuilder = readyBuilder.setSorobanData(sorobanData);
+    }
+
+    return readyBuilder.build() as Transaction;
   }
 
   // ── Override read methods with error handling ─────────────────────────────
@@ -405,15 +392,6 @@ export class LinkoraClient extends GeneratedLinkoraClient {
 
   /**
    * Build a transaction envelope for `verify_analytics_attestation`.
-   * Submitting this transaction anchors the attestation on-chain and emits
-   * `AttestationVerifiedEvent`.
-   *
-   * @param oracleName - Symbol name of the oracle (e.g. "default")
-   * @param reportCbor - Raw CBOR bytes of the analytics report
-   * @param signature  - 64-byte Ed25519 signature over sha256(reportCbor)
-   * @param creator    - Creator address represented by the report
-   * @param windowStart - Start ledger for the report window
-   * @param windowEnd  - End ledger for the report window
    */
   verifyAnalyticsAttestation(
     oracleName: string,
@@ -439,8 +417,7 @@ export class LinkoraClient extends GeneratedLinkoraClient {
 
   /**
    * Build a transaction XDR that calls `deploy_creator_token` on the token
-   * factory contract.  The caller must sign this XDR via Freighter and submit
-   * it before calling `setProfile` with the returned token address.
+   * factory contract.
    *
    * Requires `tokenFactoryId` to be set in `ClientConfig`.
    */
@@ -460,18 +437,8 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /**
-   * Build two sequential transaction XDRs that together:
-   * 1. Deploy a creator token via the factory contract.
-   * 2. Call `set_profile` on the Linkora contract with the new token address.
-   *
-   * Returns an ordered array of XDR strings.  The caller must sign and submit
-   * them in sequence (e.g. via TransactionQueue) because the token address
-   * returned by (1) is needed as input for (2).
-   *
-   * IMPORTANT: In practice the token address from tx (1) must be extracted
-   * from the simulation result before (2) can be built with the real address.
-   * Use `simulateDeployCreatorToken` to get the token address first, then call
-   * `setProfile` with it.
+   * Build two sequential transaction XDRs that together deploy a creator token
+   * and set the user's profile with the new token address.
    *
    * Requires `tokenFactoryId` to be set in `ClientConfig`.
    */
@@ -485,15 +452,14 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     });
     // NOTE: the token address used here is a placeholder; callers should
     // first simulate deployCreatorToken to get the real token address, then
-    // call setProfile(user, username, tokenAddress) directly.  This method
-    // exists for TransactionQueue pre-building and testing the sequencing.
+    // call setProfile(user, username, tokenAddress) directly.
     const profileTx = this.setProfile(params.user, params.username, params.user);
     return [deployTx, profileTx];
   }
 
   /**
    * Simulate `deploy_creator_token` to determine the token address that would
-   * be created.  Does not submit a transaction.
+   * be created. Does not submit a transaction.
    *
    * Requires `tokenFactoryId` to be set in `ClientConfig`.
    */

@@ -547,7 +547,7 @@ function scvI128(value: number | bigint): xdr.ScVal {
 }
 
 function scvAddressVec(addresses: string[]): xdr.ScVal {
-  return nativeToScVal(addresses.map(addr => Address.fromString(addr).toScVal()), { type: "vec" });
+  return nativeToScVal(addresses.map(addr => Address.fromString(addr)), { type: "vec" });
 }
 `;
 }
