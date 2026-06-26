@@ -1,4 +1,5 @@
 /**
+/**
  * Linkora Indexer — entry point.
  *
  * Connects to a Soroban RPC endpoint and streams Linkora contract events
@@ -17,9 +18,6 @@
  *   RPC_RATE_LIMIT_PER_SEC  - (optional) RPC rate cap, default 10
  *   MIN_POLL_INTERVAL_MS    - (optional) adaptive poll floor, default 100
  *   MAX_POLL_INTERVAL_MS    - (optional) adaptive poll ceiling, default 5000
- */
-/**
- * Linkora Indexer — entry point.
  */
 
 import http from "http";
@@ -80,7 +78,7 @@ async function ensureSchema(): Promise<void> {
     )
   `);
   await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS indexer_state (
+    CREATE TABLE IF NOT EXISTS indexer_cursor (
       id               TEXT        PRIMARY KEY,
       processed_cursor BIGINT      NOT NULL DEFAULT 0,
       updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
