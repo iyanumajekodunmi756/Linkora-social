@@ -14,6 +14,7 @@ import { EmptyState } from "../../components/states/EmptyState";
 import { ErrorState } from "../../components/states/ErrorState";
 import { useFeed } from "../../hooks/useFeed";
 import { useTheme } from "../../theme/useTheme";
+import { evictStaleCache } from "../../utils/db";
 
 const SKELETON_COUNT = 4;
 
@@ -35,7 +36,10 @@ export default function FeedScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (nextAppState === "active") {
+        // Sync new posts from the network.
         refresh();
+        // Evict posts older than 7 days or beyond the 100-row cap (TTL eviction).
+        evictStaleCache(86400 * 7, 100).catch((err) => console.warn("Cache eviction failed:", err));
       }
     });
     return () => {

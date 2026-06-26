@@ -116,21 +116,32 @@ export function getCachedPostById(id: string): Promise<Post | null> {
 }
 
 /**
- * Reconciles remote posts with the local cache.
+ * Reconciles remote (chain-confirmed) posts with the local cache.
+ *
+ * Chain-wins policy:
+ *  - For every confirmed chain post, upsert it as 'synced'.
+ *  - If a 'pending' or 'failed' optimistic row exists with the SAME author+content
+ *    as a confirmed chain post, delete the optimistic row (chain state supersedes it).
+ *  - Stale 'synced' rows not present in the remote set are deleted.
  */
 export function reconcilePosts(remotePosts: Post[]): Promise<void> {
   return new Promise((resolve, reject) => {
     db.transaction(
       (tx) => {
         for (const post of remotePosts) {
+          // Upsert the confirmed chain post — chain state always wins on conflict.
           tx.executeSql(
             `INSERT INTO cached_posts (id, author, username, content, tip_total, timestamp, like_count, has_liked, sync_status, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?)
              ON CONFLICT(id) DO UPDATE SET
-               tip_total = excluded.tip_total,
-               like_count = excluded.like_count,
-               has_liked = excluded.has_liked,
-               content = excluded.content;`,
+               author      = excluded.author,
+               username    = excluded.username,
+               content     = excluded.content,
+               tip_total   = excluded.tip_total,
+               timestamp   = excluded.timestamp,
+               like_count  = excluded.like_count,
+               has_liked   = excluded.has_liked,
+               sync_status = 'synced';`,
             [
               String(post.id),
               post.author,
@@ -143,10 +154,23 @@ export function reconcilePosts(remotePosts: Post[]): Promise<void> {
               Math.floor(Date.now() / 1000),
             ]
           );
+
+          // Chain-wins conflict resolution:
+          // If an optimistic (pending/failed) row exists for the same author+content
+          // but with a different local ID, the chain version is the truth — remove the local stub.
+          tx.executeSql(
+            `DELETE FROM cached_posts
+             WHERE sync_status IN ('pending', 'failed')
+               AND author  = ?
+               AND content = ?
+               AND id     != ?`,
+            [post.author, post.content, String(post.id)]
+          );
         }
 
+        // Evict stale synced rows that are no longer in the remote set.
         if (remotePosts.length > 0) {
-          const remoteIds = remotePosts.map((p) => `'${p.id}'`).join(",");
+          const remoteIds = remotePosts.map((p) => `'${String(p.id)}'`).join(",");
           tx.executeSql(
             `DELETE FROM cached_posts WHERE sync_status = 'synced' AND id NOT IN (${remoteIds})`
           );
