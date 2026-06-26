@@ -1,18 +1,23 @@
-import { useCallback } from "react";
-// TODO: Install @tanstack/react-query or remove this file
-// import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-
-// TODO: Create useLinkora hook or remove this file
-// import { useLinkora } from "./useLinkora";
+import { useCallback, useState } from "react";
 
 export const useFollow = (targetAddress: string) => {
-  // Stub implementation until dependencies are available
-  return {
-    isFollowing: false,
-    isLoading: false,
-    toggleFollow: useCallback(() => {
-      console.log("Toggle follow functionality not implemented yet for:", targetAddress);
-    }, [targetAddress]),
-    error: null,
-  };
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const toggleFollow = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      // TODO: Replace with real follow/unfollow contract call
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      setIsFollowing((prev) => !prev);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error("Follow action failed"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [targetAddress]);
+
+  return { isFollowing, isLoading, toggleFollow, error };
 };

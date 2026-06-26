@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  ActivityIndicator,
   TouchableOpacity,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { PoolCard } from "../../components/PoolCard";
+import { PoolCardSkeleton } from "../../components/skeletons/PoolCardSkeleton";
 import { usePools } from "../../hooks/usePools";
 import { EmptyState } from "../../components/states/EmptyState";
 
@@ -27,8 +27,10 @@ export default function PoolsScreen() {
           <Text style={styles.title}>Pools</Text>
           <Text style={styles.subtitle}>Community funding pools</Text>
         </View>
-        <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#6366f1" />
+        <View style={styles.listContainer}>
+          <PoolCardSkeleton />
+          <PoolCardSkeleton />
+          <PoolCardSkeleton />
         </View>
       </View>
     );
@@ -129,11 +131,6 @@ const styles = StyleSheet.create({
   listContainer: {
     paddingHorizontal: 16,
     gap: 8,
-  },
-  loaderContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
   },
   errorContainer: {
     flex: 1,

@@ -1,16 +1,25 @@
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 
 import { EmptyState } from "../../components/states/EmptyState";
 import { ErrorState } from "../../components/states/ErrorState";
 import { useNetwork } from "../../hooks/useNetwork";
+import { useToast } from "../../context/ToastContext";
 import { useWallet } from "../../hooks/useWallet";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { address, connected, connect, disconnect, error, refresh } = useWallet();
   const { networkLabel, contractId, rpcUrl } = useNetwork();
+  const { showToast } = useToast();
+
+  const copyAddress = async () => {
+    if (!address) return;
+    await Clipboard.setStringAsync(address);
+    showToast({ kind: "success", title: "Copied!", message: "Wallet address copied to clipboard." });
+  };
 
   if (error) {
     return <ErrorState message={error} onRetry={refresh} />;
@@ -22,9 +31,11 @@ export default function ProfileScreen() {
         <View style={styles.panel}>
           <Text style={styles.eyebrow}>Wallet profile</Text>
           <Text style={styles.title}>Connected wallet</Text>
-          <Text style={styles.address}>
-            {address.slice(0, 8)}…{address.slice(-6)}
-          </Text>
+          <TouchableOpacity onPress={copyAddress} activeOpacity={0.6}>
+            <Text style={styles.address}>
+              {address.slice(0, 8)}…{address.slice(-6)}
+            </Text>
+          </TouchableOpacity>
           <Text style={styles.meta}>{networkLabel} active</Text>
 
           <View style={styles.detailRow}>
