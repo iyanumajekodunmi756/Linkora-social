@@ -3,14 +3,13 @@
 /**
  * HTTP client for the Linkora DM relay service.
  *
- * The relay is transport-only: it stores and routes encrypted blobs without
+ * The relay is transport-only: stores and routes encrypted blobs without
  * ever seeing plaintext.  Authentication uses Stellar Ed25519 signatures so
  * the relay can prove the sender is who they claim to be.
  *
  * Auth scheme (mirrors services/dm-relay/auth.ts):
- *   authData  = sender_stellar_address + unix_timestamp_seconds
- *   hash      = SHA-256(authData)
- *   signature = Ed25519_sign(freighter_private_key, hash)   — via signBlob
+ *   hash      = SHA-256(sender_stellar_address + unix_timestamp_seconds)
+ *   signature = Ed25519_sign(freighter_private_key, hash)  — via Freighter signBlob
  *   sent as hex string in the JSON body
  */
 
@@ -37,29 +36,27 @@ const RELAY_URL =
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 async function sha256Web(data: Uint8Array): Promise<Uint8Array> {
-  const buf = await crypto.subtle.digest('SHA-256', data);
-  return new Uint8Array(buf);
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
 }
 
-
 /**
- * Signs hash = SHA-256(sender + timestamp) with the user's Freighter key
- * and returns the 64-byte Ed25519 signature as a hex string.
+ * Signs SHA-256(sender + timestamp) with the user's Freighter key and
+ * returns the 64-byte Ed25519 signature as a hex string.
  *
- * Freighter v2 exposes `signBlob(base64Data, opts)` which signs raw bytes
- * with the wallet's Ed25519 private key and returns base64-encoded signature.
+ * Freighter v2 exposes signBlob(base64Data, opts) which signs raw bytes with
+ * the wallet's Ed25519 private key and returns a base64-encoded signature.
  */
 async function buildAuthSignature(
   senderAddress: string,
   timestamp: number,
 ): Promise<string> {
-  const authBytes = new TextEncoder().encode(senderAddress + String(timestamp));
-  const hash = await sha256Web(authBytes);
-  const hashBase64 = bytesToBase64(hash);
+  const hash = await sha256Web(
+    new TextEncoder().encode(senderAddress + String(timestamp)),
+  );
 
-  // Dynamic import keeps this wallet call out of SSR bundles
   const { signBlob } = await import('@stellar/freighter-api');
-  const sigBase64: string = await (signBlob as Function)(hashBase64, {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sigBase64: string = await (signBlob as any)(bytesToBase64(hash), {
     accountToSign: senderAddress,
   });
 
@@ -69,7 +66,7 @@ async function buildAuthSignature(
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Encrypt-then-send a message to the relay.
+ * Submit an encrypted message to the relay.
  * The caller is responsible for encrypting `ciphertext` before calling this.
  */
 export async function sendRelayMessage(
@@ -81,15 +78,13 @@ export async function sendRelayMessage(
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = await buildAuthSignature(senderAddress, timestamp);
 
-  const ciphertextB64 = bytesToBase64(ciphertext);
-
   const res = await fetch(`${RELAY_URL}/api/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       sender: senderAddress,
       recipient: recipientAddress,
-      ciphertext_b64: ciphertextB64,
+      ciphertext_b64: bytesToBase64(ciphertext),
       message_index: messageIndex,
       timestamp,
       signature,
@@ -104,8 +99,8 @@ export async function sendRelayMessage(
 
 /**
  * Fetch all messages for the conversation between myAddress and theirAddress.
- * The conversation ID is derived deterministically from the sorted addresses,
- * matching the relay server's own computation.
+ * The conversation ID is derived from sorted addresses, matching the relay
+ * server's own computation in services/dm-relay/routes.ts.
  */
 export async function fetchRelayMessages(
   myAddress: string,

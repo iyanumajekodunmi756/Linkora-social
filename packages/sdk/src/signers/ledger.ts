@@ -1,29 +1,30 @@
 import { Signer } from "../types";
-import { TransactionBuilder } from "@stellar/stellar-sdk";
+
+interface LedgerTransport {
+  close(): Promise<void>;
+}
 
 /**
  * Ledger signer implementation for hardware wallet support.
  * Works in both browser (WebHID) and Node.js (HID) environments.
  */
 export class LedgerSigner implements Signer {
-  private publicKey: string | null = null;
-  private transport: any = null;
+  private publicKeyCache: Map<string, string> = new Map();
+  private transport: LedgerTransport | null = null;
 
   constructor() {
-    // No initialization needed here; transport is lazy-loaded
+    // Transport is lazy-loaded on first use
   }
 
   /**
-   * Get or create the appropriate transport based on environment
+   * Get or create the appropriate transport based on environment.
    */
-  private async getTransport(): Promise<any> {
+  private async getTransport(): Promise<LedgerTransport> {
     if (this.transport) {
       return this.transport;
     }
 
-    // Check if we're in a browser or Node.js environment
     if (typeof window !== "undefined") {
-      // Browser environment - use WebHID
       try {
         const { default: TransportWebHID } = await import("@ledgerhq/hw-transport-webhid");
         this.transport = await TransportWebHID.create();
@@ -33,7 +34,6 @@ export class LedgerSigner implements Signer {
         );
       }
     } else {
-      // Node.js environment - use Node HID
       try {
         const { default: TransportNodeHID } = await import("@ledgerhq/hw-transport-node-hid");
         const devices = await TransportNodeHID.list();
@@ -48,17 +48,18 @@ export class LedgerSigner implements Signer {
       }
     }
 
-    return this.transport;
+    return this.transport as LedgerTransport;
   }
 
   /**
-   * Get the public key from the Ledger device
-   * @param derivationPath Optional Stellar derivation path (default: "m/44'/148'/0'")
+   * Get the public key from the Ledger device.
+   * Results are cached per derivation path. The cache is invalidated on close().
+   *
+   * @param derivationPath Stellar BIP-44 derivation path (default: "m/44'/148'/0'")
    */
   async getPublicKey(derivationPath: string = "m/44'/148'/0'"): Promise<string> {
-    if (this.publicKey) {
-      return this.publicKey;
-    }
+    const cached = this.publicKeyCache.get(derivationPath);
+    if (cached) return cached;
 
     try {
       const transport = await this.getTransport();
@@ -66,7 +67,7 @@ export class LedgerSigner implements Signer {
       const app = new StrApp(transport);
 
       const result = await app.getPublicKey(derivationPath);
-      this.publicKey = result.publicKey;
+      this.publicKeyCache.set(derivationPath, result.publicKey);
       return result.publicKey;
     } catch (error) {
       throw new Error(
@@ -76,33 +77,46 @@ export class LedgerSigner implements Signer {
   }
 
   /**
-   * Sign a transaction using the Ledger device
-   * @param tx The transaction to sign (can be a Transaction object or XDR string)
-   * @param derivationPath Optional Stellar derivation path (default: "m/44'/148'/0'")
+   * Sign a transaction using the Ledger device.
+   *
+   * The @ledgerhq/hw-app-str signTransaction call returns a raw 64-byte Ed25519
+   * signature (not a signed XDR envelope). This method attaches that signature
+   * as a DecoratedSignature on the transaction and returns the modified object.
+   *
+   * @param tx Transaction object or base64 XDR string
+   * @param derivationPath Stellar BIP-44 derivation path (default: "m/44'/148'/0'")
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async signTransaction(tx: any, derivationPath: string = "m/44'/148'/0'"): Promise<any> {
     try {
       const transport = await this.getTransport();
       const { default: StrApp } = await import("@ledgerhq/hw-app-str");
       const app = new StrApp(transport);
 
-      // If tx is a Transaction object, convert to XDR
       const xdrString = typeof tx === "string" ? tx : tx.toEnvelope().toXDR("base64");
+      const txBytes = Buffer.from(xdrString, "base64");
 
-      const signature = await app.signTransaction(derivationPath, Buffer.from(xdrString, "base64"));
+      // Ledger returns { signature: Buffer } — a 64-byte raw Ed25519 signature,
+      // not a signed XDR envelope. Attach it to the transaction as a DecoratedSignature.
+      const { signature } = await app.signTransaction(derivationPath, txBytes);
 
-      // If the original input was a Transaction object, convert back
       if (typeof tx !== "string") {
-        const { TransactionBuilder } = await import("@stellar/stellar-sdk");
-        // The signature is already integrated by the app.signTransaction
-        return TransactionBuilder.fromXDR(signature, tx.networkPassphrase);
+        const { Keypair, xdr } = await import("@stellar/stellar-sdk");
+        const publicKey = await this.getPublicKey(derivationPath);
+        const keypair = Keypair.fromPublicKey(publicKey);
+        tx.signatures.push(
+          new xdr.DecoratedSignature({
+            hint: keypair.signatureHint(),
+            signature,
+          })
+        );
+        return tx;
       }
 
-      return signature;
+      return signature.toString("base64");
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      // Handle specific Ledger errors
+
       if (errorMessage.includes("device not found") || errorMessage.includes("not connected")) {
         throw new Error("Ledger device not found or not connected");
       }
@@ -121,15 +135,17 @@ export class LedgerSigner implements Signer {
   }
 
   /**
-   * Close the Ledger transport connection
+   * Close the Ledger transport connection and invalidate the public key cache.
    */
   async close(): Promise<void> {
     if (this.transport) {
       try {
         await this.transport.close();
-        this.transport = null;
-      } catch (error) {
+      } catch {
         // Silently fail on close
+      } finally {
+        this.transport = null;
+        this.publicKeyCache.clear();
       }
     }
   }

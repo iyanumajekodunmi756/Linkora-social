@@ -1,18 +1,18 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      // Polyfill Node.js built-ins for browser bundles (required by stellar-sdk)
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        buffer: false,
-        crypto: false,
-        stream: false,
-        fs: false,
-        path: false,
-        os: false,
-      };
-    }
+  transpilePackages: ['linkora-sdk'],
+  webpack: (config) => {
+    // Resolve linkora-sdk to its TypeScript source so Next.js can transpile it
+    // directly instead of relying on a pre-built dist/ folder.
+    config.resolve.alias['linkora-sdk'] = path.resolve(
+      __dirname,
+      '../../packages/sdk/src',
+    );
     return config;
   },
 };

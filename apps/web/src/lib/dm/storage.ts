@@ -1,25 +1,19 @@
 'use client';
 
 /**
- * Secure-as-possible localStorage persistence for DM keypairs.
+ * localStorage persistence for the user's X25519 DM keypair.
  *
- * Keys are stored per-wallet-address so multiple Freighter accounts on the
- * same browser each get their own DM identity.
- *
- * Mobile counterpart uses expo-secure-store (see apps/mobile).
+ * Keys are namespaced per Freighter wallet address so multiple accounts on
+ * the same browser remain isolated.  Mobile counterpart uses expo-secure-store.
  */
 
-import { type DmKeypair, bytesToBase64, base64ToBytes } from './crypto';
+import type { DmKeyPair } from 'linkora-sdk/dm/crypto';
+import { bytesToBase64, base64ToBytes } from './crypto';
 
 const PREFIX = 'linkora_dm_';
 
-function pubKey(addr: string) {
-  return `${PREFIX}x25519_pub_${addr}`;
-}
-
-function privKey(addr: string) {
-  return `${PREFIX}x25519_priv_${addr}`;
-}
+function pubKey(addr: string) { return `${PREFIX}x25519_pub_${addr}`; }
+function privKey(addr: string) { return `${PREFIX}x25519_priv_${addr}`; }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -31,12 +25,12 @@ export function hasDmKeypair(address: string): boolean {
   );
 }
 
-export function storeDmKeypair(address: string, keypair: DmKeypair): void {
+export function storeDmKeypair(address: string, keypair: DmKeyPair): void {
   localStorage.setItem(pubKey(address), bytesToBase64(keypair.publicKey));
   localStorage.setItem(privKey(address), bytesToBase64(keypair.privateKey));
 }
 
-export function loadDmKeypair(address: string): DmKeypair | null {
+export function loadDmKeypair(address: string): DmKeyPair | null {
   const pub = localStorage.getItem(pubKey(address));
   const priv = localStorage.getItem(privKey(address));
   if (!pub || !priv) return null;
