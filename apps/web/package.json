@@ -10,7 +10,11 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@noble/ciphers": "^0.5.3",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
     "@stellar/freighter-api": "^2.0.0",
+    "@stellar/stellar-sdk": "^12.3.0",
     "next": "15.3.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
