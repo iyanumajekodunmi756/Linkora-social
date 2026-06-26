@@ -1760,6 +1760,30 @@ fn test_pool_withdraw_m_of_n_exceeds_balance_rejected() {
     client.pool_withdraw(&signers, &pool_id, &101, &recipient);
 }
 
+// ── Issue #713: pool_withdraw requires minimum threshold signers ──────────────
+
+#[test]
+#[should_panic(expected = "insufficient signers")]
+fn test_pool_withdraw_requires_minimum_threshold_signers() {
+    // Create a pool with 3 admins and threshold 2.
+    // Call pool_withdraw with only 1 signer.
+    // Verify it panics with 'insufficient signers'.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, token, admins) = setup_pool(&env, 3, 2, 300);
+
+    let depositor = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&depositor, &500);
+    client.pool_deposit(&depositor, &pool_id, &token, &100);
+
+    let recipient = Address::generate(&env);
+
+    // Only 1 signer provided, but threshold is 2 — must panic with "insufficient signers"
+    let signers = vec![&env, admins.get(0).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &50, &recipient);
+}
+
 // ── Issue #343: full tip flow integration tests ───────────────────────────────
 
 #[test]
