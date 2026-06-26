@@ -3,6 +3,7 @@ import renderer from "react-test-renderer";
 import { fireEvent, render } from "@testing-library/react-native";
 import { PostCard, Post } from "./PostCard";
 import { useRouter } from "expo-router";
+import * as Haptics from "expo-haptics";
 
 jest.mock("expo-router", () => ({ useRouter: jest.fn(() => ({ push: jest.fn() })) }));
 jest.mock("../context/WalletContext", () => ({
@@ -108,6 +109,14 @@ describe("PostCard", () => {
       );
       fireEvent.press(card!);
       expect(mockPush).toHaveBeenCalledWith(`/post/${defaultPost.id}`);
+    });
+
+    it("triggers light haptic feedback when the like button is pressed", () => {
+      const { getByLabelText } = render(<PostCard post={defaultPost} />);
+
+      fireEvent.press(getByLabelText("Like post"));
+
+      expect(Haptics.impactAsync).toHaveBeenCalledWith(Haptics.ImpactFeedbackStyle.Light);
     });
   });
 });

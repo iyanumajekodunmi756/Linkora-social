@@ -1,18 +1,17 @@
 "use client";
 
-import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
-import { useRouter } from "next/navigation";
 import { ProfileSection } from "@/components/settings/ProfileSection";
 import { WalletSection } from "@/components/settings/WalletSection";
 import { DmKeySection } from "@/components/settings/DmKeySection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
+import { BlockListSection } from "@/components/settings/BlockListSection";
 import { GovernanceSection } from "@/components/settings/GovernanceSection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
+import { ThemeSection } from "@/components/settings/ThemeSection";
 
 export default function SettingsPage() {
   const { address, connected } = useWallet();
-  const router = useRouter();
 
   if (!connected || !address) {
     return (
@@ -27,6 +26,9 @@ export default function SettingsPage() {
       <h1 className="text-3xl font-bold mb-8">Settings</h1>
 
       <div className="space-y-8">
+        {/* Appearance Section */}
+        <ThemeSection />
+
         {/* Profile Section */}
         <ProfileSection address={address} />
 
@@ -38,6 +40,9 @@ export default function SettingsPage() {
 
         {/* Notifications Section */}
         <NotificationsSection />
+
+        {/* Block List Section */}
+        <BlockListSection address={address} />
 
         {/* Governance Section */}
         <GovernanceSection address={address} />

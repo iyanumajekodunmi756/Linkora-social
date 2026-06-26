@@ -28,7 +28,7 @@ const FRIENDLY_USERS = [
   "sybil",
 ];
 
-const MOCK_USERS = Array.from({ length: 45 }, (_, i) => {
+const MOCK_USERS = Array.from({ length: 75 }, (_, i) => {
   const index = i + 1;
   const prefix = String.fromCharCode(65 + (i % 26));
   const address = `G${prefix}${Array(53).fill("X").join("")}${index.toString().padStart(2, "0")}`;

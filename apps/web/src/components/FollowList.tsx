@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { LinkoraClient } from "linkora-sdk";
-import { OptimisticStore } from "@/lib/OptimisticStore";
+import { OptimisticStore } from "@/lib/optimisticStore";
 
 
 export interface FollowUser {
@@ -16,7 +16,7 @@ interface FollowListProps {
   type: "followers" | "following";
 }
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = 50;
 
 function getBlockieSvg(address: string) {
   let hash = 0;
@@ -37,25 +37,30 @@ export function FollowList({ address, type }: FollowListProps) {
   const [users, setUsers] = useState<FollowUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [blockedList, setBlockedList] = useState<string[]>([]);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
 
   const [, setTick] = useState(0);
 
-  const offsetRef = useRef(0);
   const loadingRef = useRef(false);
   const client = useRef<LinkoraClient | null>(null);
 
   useEffect(() => {
     client.current = new LinkoraClient({
-      contractId: process.env.NEXT_PUBLIC_CONTRACT_ID || "CBQHLSNMBF4HS3UX2PV72T75V2SXE7M2EZZTQ6YC5DSXIGGY4NPSAFAF",
+      contractId:
+        process.env.NEXT_PUBLIC_CONTRACT_ID ||
+        "CBQHLSNMBF4HS3UX2PV72T75V2SXE7M2EZZTQ6YC5DSXIGGY4NPSAFAF",
       rpcUrl: process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org",
     });
 
     if (typeof window !== "undefined") {
-      const storedUser = localStorage.getItem("linkora_wallet_address") || localStorage.getItem("linkora_wallet_public_key");
+      const storedUser =
+        localStorage.getItem("linkora_wallet_address") ||
+        localStorage.getItem("linkora_wallet_public_key");
       setCurrentUser(storedUser);
 
       const storedBlocked = localStorage.getItem("linkora_blocked_accounts");
@@ -73,25 +78,31 @@ export function FollowList({ address, type }: FollowListProps) {
   }, []);
 
   const load = useCallback(
-    async (offset: number, replace: boolean) => {
+    async (pageNumber: number) => {
       if (loadingRef.current) return;
       loadingRef.current = true;
       setLoading(true);
       setError(null);
+      const offset = pageNumber * PAGE_SIZE;
 
       try {
-        const res = await fetch(`/api/follows/${address}/${type}?limit=${PAGE_SIZE}&offset=${offset}`);
+        const res = await fetch(
+          `/api/follows/${address}/${type}?limit=${PAGE_SIZE}&offset=${offset}`
+        );
         if (!res.ok) {
           throw new Error("Failed to load list");
         }
         const data = await res.json();
         const listField = type === "followers" ? data.followers : data.following;
-        
-        setUsers((prev) => (replace ? listField : [...prev, ...listField]));
-        setHasMore(data.has_more ?? (listField.length >= PAGE_SIZE));
-        offsetRef.current = offset + listField.length;
+        const nextUsers = Array.isArray(listField) ? listField : [];
+
+        setUsers(nextUsers);
+        setPage(pageNumber);
+        setTotal(Number(data.total ?? offset + nextUsers.length));
+        setHasMore(data.has_more ?? nextUsers.length >= PAGE_SIZE);
       } catch (err) {
         setError("Failed to load users. Please try again later.");
+        setHasMore(false);
       } finally {
         setLoading(false);
         loadingRef.current = false;
@@ -101,30 +112,20 @@ export function FollowList({ address, type }: FollowListProps) {
   );
 
   useEffect(() => {
-    offsetRef.current = 0;
-    load(0, true);
+    load(0);
   }, [load]);
 
-  const loadMore = useCallback(() => {
-    if (!loading && hasMore) {
-      load(offsetRef.current, false);
+  const goToPreviousPage = useCallback(() => {
+    if (!loading && page > 0) {
+      load(page - 1);
     }
-  }, [loading, hasMore, load]);
+  }, [load, loading, page]);
 
-  useEffect(() => {
-    if (!hasMore || loading) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          loadMore();
-        }
-      },
-      { threshold: 0.8 }
-    );
-    const target = document.getElementById("infinite-scroll-trigger");
-    if (target) observer.observe(target);
-    return () => observer.disconnect();
-  }, [hasMore, loading, loadMore]);
+  const goToNextPage = useCallback(() => {
+    if (!loading && hasMore) {
+      load(page + 1);
+    }
+  }, [hasMore, load, loading, page]);
 
   const handleToggleFollow = async (targetUser: FollowUser) => {
     if (!currentUser) {
@@ -136,7 +137,7 @@ export function FollowList({ address, type }: FollowListProps) {
     const isFollowing = OptimisticStore.isFollowing(targetAddress);
 
     OptimisticStore.setFollowing(targetAddress, !isFollowing);
-    OptimisticStore.setPending(targetAddress, true);
+    OptimisticStore.setPending(targetAddress, { isPending: true });
 
     try {
       const isMockAddress = targetAddress.includes("XXXX") || currentUser.includes("XXXX");
@@ -152,7 +153,7 @@ export function FollowList({ address, type }: FollowListProps) {
       OptimisticStore.setFollowing(targetAddress, isFollowing);
       alert(err instanceof Error ? err.message : "Action failed");
     } finally {
-      OptimisticStore.setPending(targetAddress, false);
+      OptimisticStore.setPending(targetAddress, { isPending: false });
     }
   };
 
@@ -165,11 +166,15 @@ export function FollowList({ address, type }: FollowListProps) {
     }
     return true;
   });
+  const showPagination = total > PAGE_SIZE || page > 0 || hasMore;
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-xl">
       <header className="flex flex-col gap-2 mb-6">
-        <Link href={`/profile/${address}`} className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold mb-2 inline-block self-start">
+        <Link
+          href={`/profile/${address}`}
+          className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold mb-2 inline-block self-start"
+        >
           &larr; Back to Profile
         </Link>
         <h1 className="text-2xl font-bold text-gray-900">
@@ -194,7 +199,17 @@ export function FollowList({ address, type }: FollowListProps) {
         </div>
       )}
 
-      <ul role="list" aria-label={type === "followers" ? "Followers list" : "Following list"} className="flex flex-col gap-3">
+      {error && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <ul
+        role="list"
+        aria-label={type === "followers" ? "Followers list" : "Following list"}
+        className="flex flex-col gap-3"
+      >
         {visibleUsers.map((user) => {
           const isFollowing = OptimisticStore.isFollowing(user.address);
           const isPending = OptimisticStore.isPending(user.address);
@@ -220,10 +235,15 @@ export function FollowList({ address, type }: FollowListProps) {
                   className="w-10 h-10 rounded-full border border-gray-200 flex-shrink-0"
                 />
                 <div className="flex-1 min-w-0">
-                  <Link href={`/profile/${user.address}`} className="block font-semibold text-gray-900 hover:text-indigo-600 truncate">
+                  <Link
+                    href={`/profile/${user.address}`}
+                    className="block font-semibold text-gray-900 hover:text-indigo-600 truncate"
+                  >
                     @{user.username}
                   </Link>
-                  <span className="block text-xs text-gray-500 font-mono truncate">{formatAddress(user.address)}</span>
+                  <span className="block text-xs text-gray-500 font-mono truncate">
+                    {formatAddress(user.address)}
+                  </span>
                 </div>
 
                 {!isMe && currentUser && (
@@ -238,7 +258,9 @@ export function FollowList({ address, type }: FollowListProps) {
                         ? "bg-gray-100 text-gray-700 border border-gray-200 hover:bg-gray-250"
                         : "bg-indigo-600 text-white hover:bg-indigo-700"
                     } ${isPending ? "opacity-55 cursor-not-allowed" : "cursor-pointer"}`}
-                    aria-label={isFollowing ? `Unfollow ${user.username}` : `Follow ${user.username}`}
+                    aria-label={
+                      isFollowing ? `Unfollow ${user.username}` : `Follow ${user.username}`
+                    }
                   >
                     {isPending ? "Updating..." : isFollowing ? "Following" : "Follow"}
                   </button>
@@ -256,8 +278,31 @@ export function FollowList({ address, type }: FollowListProps) {
         </div>
       )}
 
-      {hasMore && !loading && (
-        <div id="infinite-scroll-trigger" className="h-1 my-2" />
+      {showPagination && (
+        <nav
+          className="mt-6 flex items-center justify-between gap-3"
+          aria-label={`${type === "followers" ? "Followers" : "Following"} pagination`}
+        >
+          <button
+            type="button"
+            onClick={goToPreviousPage}
+            disabled={loading || page === 0}
+            className="min-w-[88px] rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Prev
+          </button>
+          <span className="text-sm font-semibold text-gray-700" aria-live="polite">
+            Page {page + 1}
+          </span>
+          <button
+            type="button"
+            onClick={goToNextPage}
+            disabled={loading || !hasMore}
+            className="min-w-[88px] rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Next
+          </button>
+        </nav>
       )}
     </div>
   );

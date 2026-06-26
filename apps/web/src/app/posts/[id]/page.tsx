@@ -3,524 +3,158 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { LinkoraClient, type Post } from "linkora-sdk";
 
-// In a real app this comes from a wallet context / auth hook.
-const MOCK_CURRENT_USER = "";
-
-interface Post {
-  id: number;
-  author: string;
-  username?: string;
-  content: string;
-  tip_total: number;
-  timestamp: number;
-  like_count: number;
-}
-
-function formatAddress(addr: string) {
-  if (addr.length < 12) return addr;
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-}
-
-function formatTimestamp(ts: number) {
-  const date = new Date(ts * 1000);
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatTipTotal(amount: number) {
-  return (amount / 10_000_000).toFixed(2);
-}
-
-import { TipModal } from "@/components/TipModal";
-
-// ── Delete confirmation dialog ────────────────────────────────────────────────
-
-function DeleteDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
-  return (
-    <div style={styles.overlay} role="dialog" aria-modal aria-label="Confirm delete">
-      <div style={{ ...styles.modal, maxWidth: "360px" }}>
-        <h2 style={styles.modalTitle}>Delete post?</h2>
-        <p style={styles.modalDesc}>
-          This action cannot be undone. The post will be permanently removed from the chain.
-        </p>
-        <div style={styles.modalActions}>
-          <button onClick={onCancel} style={styles.cancelBtn}>
-            Keep post
-          </button>
-          <button onClick={onConfirm} style={styles.deleteConfirmBtn}>
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Main page ─────────────────────────────────────────────────────────────────
+const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
+const CONTRACT_ID =
+  process.env.NEXT_PUBLIC_CONTRACT_ID ?? "CDD6V66I7G2K2TCHWGLD4QIPZ4E47W4T3HLY3W7YJ4NGRRYUDRF6QYLR";
 
 export default function PostDetailPage() {
   const params = useParams();
-  const postId = Number(params?.id);
+  const postId = typeof params?.id === "string" ? params.id : null;
 
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [isLiked, setIsLiked] = useState(false);
-  const [liking, setLiking] = useState(false);
-  const [showTip, setShowTip] = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
-  const [deleted, setDeleted] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+
+  const handleCopyLink = useCallback(async () => {
+    await navigator.clipboard.writeText(window.location.href);
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 1500);
+  }, []);
 
   useEffect(() => {
+    if (!postId) {
+      setNotFound(true);
+      setLoading(false);
+      return;
+    }
+
+    const client = new LinkoraClient({
+      rpcUrl: RPC_URL,
+      contractId: CONTRACT_ID,
+    });
+
     setLoading(true);
+    setError(null);
     setNotFound(false);
 
-    // Mock data — replace with contract call: get_post(postId) + has_liked(currentUser, postId)
-    setTimeout(() => {
-      if (!postId || postId < 1) {
-        setNotFound(true);
+    client
+      .getPost(BigInt(postId))
+      .then((postData: any) => {
+        if (postData) {
+          setPost(postData);
+        } else {
+          setNotFound(true);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to fetch post:", err);
+        setError(err instanceof Error ? err.message : "Failed to load post");
+      })
+      .finally(() => {
         setLoading(false);
-        return;
-      }
-      setPost({
-        id: postId,
-        author: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF3",
-        username: "creator_alice",
-        content:
-          "Just deployed my first Soroban smart contract! The Stellar network's speed and low fees make it genuinely viable for creator economy applications. If you're building on-chain social, look no further. 🚀\n\nHere's what I learned from the experience…",
-        tip_total: 245_000_000,
-        timestamp: Date.now() / 1000 - 10_800,
-        like_count: 47,
       });
-      setLoading(false);
-    }, 400);
   }, [postId]);
-
-  const isAuthor = MOCK_CURRENT_USER !== "" && post?.author === MOCK_CURRENT_USER;
-
-  const handleLike = useCallback(() => {
-    if (liking || !post) return;
-    setLiking(true);
-    setTimeout(() => {
-      setIsLiked((prev) => !prev);
-      setPost((p) => (p ? { ...p, like_count: p.like_count + (isLiked ? -1 : 1) } : p));
-      setLiking(false);
-    }, 400);
-  }, [liking, post, isLiked]);
-
-  const handleShare = () => {
-    const url = window.location.href;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
-  };
-
-  const handleDelete = () => {
-    // Replace with contract call: delete_post(author, postId)
-    setShowDelete(false);
-    setDeleted(true);
-  };
 
   if (loading) {
     return (
-      <main style={styles.page}>
-        <div style={styles.skeleton} />
-        <div style={{ ...styles.skeleton, height: "60px" }} />
-        <div style={{ ...styles.skeleton, height: "80px" }} />
+      <main className="max-w-xl mx-auto px-4 py-12 flex flex-col gap-4">
+        <div className="h-6 w-32 bg-gray-800 rounded-lg animate-pulse" />
+        <div className="h-40 w-full bg-gray-800 rounded-xl animate-pulse" />
       </main>
     );
   }
 
-  if (notFound || !post || deleted) {
+  if (notFound || error || !post) {
     return (
-      <main style={styles.page}>
-        <Link href="/feed" style={styles.backLink}>
-          ← Back to feed
+      <main className="max-w-xl mx-auto px-4 py-12 flex flex-col gap-6 text-center">
+        <div className="text-5xl">🔍</div>
+        <h2 className="text-2xl font-bold text-white">Post Not Found</h2>
+        <p className="text-[var(--text-muted)]">
+          {error
+            ? `Error: ${error}`
+            : "This post may not exist or has been removed from the blockchain."}
+        </p>
+        <Link href="/explore" className="text-violet-500 hover:underline font-semibold">
+          ← Back to Explore
         </Link>
-        <div style={styles.emptyState}>
-          <span style={{ fontSize: "2.5rem" }}>🔍</span>
-          <p style={styles.emptyTitle}>Post not found</p>
-          <p style={styles.emptyDesc}>
-            {deleted
-              ? "The post was deleted successfully."
-              : "This post may not exist or has been removed."}
-          </p>
-        </div>
       </main>
     );
   }
 
   return (
-    <main style={styles.page}>
-      <Link href="/feed" style={styles.backLink}>
-        ← Back to feed
+    <main className="max-w-xl mx-auto px-4 py-12">
+      <Link
+        href="/explore"
+        className="inline-block mb-6 text-sm font-semibold text-violet-500 hover:underline"
+      >
+        ← Back to Explore
       </Link>
 
-      {/* ── Author card ─────────────────────────────────────────────────── */}
-      <div style={styles.authorCard}>
-        <div style={styles.avatar} aria-hidden="true" />
-        <div style={styles.authorInfo}>
-          <Link href={`/profile/${post.author}`} style={styles.authorName}>
-            @{post.username || formatAddress(post.author)}
-          </Link>
-          <code style={styles.authorAddress}>{formatAddress(post.author)}</code>
+      <article className="bg-[var(--muted)] border border-[var(--border)] rounded-2xl p-6 shadow-xl flex flex-col gap-4">
+        {/* Author */}
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-[var(--accent)] flex items-center justify-center text-white font-bold text-sm">
+            {post.author.slice(0, 2).toUpperCase()}
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-bold text-white">
+              {post.author.slice(0, 6)}...{post.author.slice(-4)}
+            </span>
+            <span className="text-xs text-[var(--text-muted)] font-mono">{post.author}</span>
+          </div>
         </div>
-        {isAuthor && (
+
+        {/* Content */}
+        <p className="text-white text-lg break-words whitespace-pre-wrap leading-relaxed">
+          {post.content}
+        </p>
+
+        {/* Footer/Metrics */}
+        <div className="border-t border-[var(--border)] pt-4 mt-2 flex items-center gap-6 text-xs text-[var(--text-muted)]">
+          <div>
+            Likes: <span className="font-bold text-white">{post.like_count.toString()}</span>
+          </div>
+          <div>
+            Tipped:{" "}
+            <span className="font-bold text-white">
+              {(Number(post.tip_total) / 10_000_000).toFixed(2)} XLM
+            </span>
+          </div>
+          <div>
+            Posted:{" "}
+            <span className="font-bold text-white">
+              {new Date(Number(post.timestamp) * 1000).toLocaleString()}
+            </span>
+          </div>
+
+          {/* Share / Copy link */}
           <button
-            onClick={() => setShowDelete(true)}
-            style={styles.deleteBtn}
-            aria-label="Delete post"
+            onClick={handleCopyLink}
+            className="ml-auto flex items-center gap-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
+            aria-label="Copy post link to clipboard"
           >
-            🗑 Delete
+            {copyFeedback ? (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+                <span className="font-semibold text-violet-400">Copied!</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
+                </svg>
+                <span className="font-semibold">Share</span>
+              </>
+            )}
           </button>
-        )}
-      </div>
-
-      {/* ── Post content ─────────────────────────────────────────────────── */}
-      <article style={styles.contentCard}>
-        <p style={styles.content}>{post.content}</p>
-        <time style={styles.timestamp}>{formatTimestamp(post.timestamp)}</time>
+        </div>
       </article>
-
-      {/* ── Engagement metrics ───────────────────────────────────────────── */}
-      <div style={styles.metricsRow}>
-        <div style={styles.metric}>
-          <span style={styles.metricValue}>{post.like_count}</span>
-          <span style={styles.metricLabel}>likes</span>
-        </div>
-        <div style={styles.metric}>
-          <span style={styles.metricValue}>{formatTipTotal(post.tip_total)} XLM</span>
-          <span style={styles.metricLabel}>tipped</span>
-        </div>
-      </div>
-
-      {/* ── Action buttons ───────────────────────────────────────────────── */}
-      <div style={styles.actions}>
-        <button
-          onClick={handleLike}
-          disabled={liking}
-          style={{
-            ...styles.actionBtn,
-            ...(isLiked ? styles.likedBtn : {}),
-          }}
-          aria-label={isLiked ? "Unlike post" : "Like post"}
-          aria-pressed={isLiked}
-        >
-          <span>{isLiked ? "❤️" : "🤍"}</span>
-          <span>{isLiked ? "Liked" : "Like"}</span>
-        </button>
-
-        <button
-          onClick={() => setShowTip(true)}
-          style={styles.tipActionBtn}
-          aria-label="Tip author"
-        >
-          <span>💎</span>
-          <span>Tip</span>
-        </button>
-
-        <button onClick={handleShare} style={styles.actionBtn} aria-label="Share post">
-          <span>🔗</span>
-          <span>{copied ? "Copied!" : "Share"}</span>
-        </button>
-      </div>
-
-      {/* ── Modals ──────────────────────────────────────────────────────── */}
-      {showTip && (
-        <TipModal
-          postId={post.id}
-          authorName={post.username || formatAddress(post.author)}
-          onClose={() => setShowTip(false)}
-        />
-      )}
-      {showDelete && (
-        <DeleteDialog onConfirm={handleDelete} onCancel={() => setShowDelete(false)} />
-      )}
     </main>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    maxWidth: "640px",
-    margin: "0 auto",
-    padding: "var(--spacing-lg)",
-    minHeight: "100vh",
-    background: "var(--color-bg-secondary)",
-  },
-  backLink: {
-    display: "inline-block",
-    marginBottom: "var(--spacing-md)",
-    fontSize: "0.9rem",
-    fontWeight: 600,
-    color: "var(--color-primary)",
-    textDecoration: "none",
-  },
-  authorCard: {
-    display: "flex",
-    alignItems: "center",
-    gap: "var(--spacing-md)",
-    background: "var(--color-bg)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "12px",
-    padding: "var(--spacing-md) var(--spacing-lg)",
-    marginBottom: "var(--spacing-md)",
-  },
-  avatar: {
-    width: "48px",
-    height: "48px",
-    borderRadius: "50%",
-    background: "var(--color-bg-secondary)",
-    border: "2px solid var(--color-border)",
-    flexShrink: 0,
-  },
-  authorInfo: {
-    flex: 1,
-    minWidth: 0,
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-  },
-  authorName: {
-    fontWeight: 700,
-    fontSize: "1rem",
-    color: "var(--color-text)",
-    textDecoration: "none",
-  },
-  authorAddress: {
-    fontSize: "0.75rem",
-    color: "var(--color-text-secondary)",
-    fontFamily: "monospace",
-  },
-  deleteBtn: {
-    padding: "var(--spacing-sm) var(--spacing-md)",
-    background: "#fee2e2",
-    color: "#991b1b",
-    borderRadius: "8px",
-    fontWeight: 600,
-    fontSize: "0.85rem",
-    minHeight: "var(--min-touch-target)",
-    cursor: "pointer",
-    border: "none",
-    flexShrink: 0,
-  },
-  contentCard: {
-    background: "var(--color-bg)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "12px",
-    padding: "var(--spacing-lg)",
-    marginBottom: "var(--spacing-md)",
-  },
-  content: {
-    fontSize: "1.05rem",
-    lineHeight: 1.7,
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-    color: "var(--color-text)",
-    marginBottom: "var(--spacing-md)",
-  },
-  timestamp: {
-    display: "block",
-    fontSize: "0.82rem",
-    color: "var(--color-text-secondary)",
-  },
-  metricsRow: {
-    display: "flex",
-    gap: "var(--spacing-lg)",
-    padding: "var(--spacing-md) var(--spacing-lg)",
-    background: "var(--color-bg)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "12px",
-    marginBottom: "var(--spacing-md)",
-  },
-  metric: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: "6px",
-  },
-  metricValue: {
-    fontWeight: 700,
-    fontSize: "1rem",
-    color: "var(--color-text)",
-  },
-  metricLabel: {
-    fontSize: "0.85rem",
-    color: "var(--color-text-secondary)",
-  },
-  actions: {
-    display: "flex",
-    gap: "var(--spacing-sm)",
-    flexWrap: "wrap",
-  },
-  actionBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: "var(--spacing-sm)",
-    padding: "var(--spacing-sm) var(--spacing-lg)",
-    background: "var(--color-bg)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "8px",
-    fontWeight: 600,
-    fontSize: "0.9rem",
-    minHeight: "var(--min-touch-target)",
-    cursor: "pointer",
-    transition: "background 0.15s",
-    color: "var(--color-text)",
-    flex: 1,
-    justifyContent: "center",
-  },
-  likedBtn: {
-    background: "#fee2e2",
-    borderColor: "#fca5a5",
-    color: "#991b1b",
-  },
-  tipActionBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: "var(--spacing-sm)",
-    padding: "var(--spacing-sm) var(--spacing-lg)",
-    background: "var(--color-primary)",
-    border: "none",
-    borderRadius: "8px",
-    fontWeight: 600,
-    fontSize: "0.9rem",
-    minHeight: "var(--min-touch-target)",
-    cursor: "pointer",
-    color: "white",
-    flex: 1,
-    justifyContent: "center",
-    transition: "background 0.15s",
-  },
-  /* ── Modals ─────────────────────────────────────────────────────────────── */
-  overlay: {
-    position: "fixed",
-    inset: 0,
-    background: "rgba(0,0,0,0.45)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 50,
-    padding: "var(--spacing-lg)",
-  },
-  modal: {
-    background: "var(--color-bg)",
-    borderRadius: "16px",
-    padding: "var(--spacing-lg)",
-    width: "100%",
-    maxWidth: "420px",
-    boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
-  },
-  modalTitle: {
-    fontSize: "1.15rem",
-    fontWeight: 700,
-    marginBottom: "var(--spacing-sm)",
-    color: "var(--color-text)",
-  },
-  modalDesc: {
-    fontSize: "0.88rem",
-    color: "var(--color-text-secondary)",
-    marginBottom: "var(--spacing-lg)",
-    lineHeight: 1.5,
-  },
-  label: {
-    display: "block",
-    fontWeight: 600,
-    fontSize: "0.9rem",
-    marginBottom: "var(--spacing-xs)",
-    color: "var(--color-text)",
-  },
-  input: {
-    width: "100%",
-    padding: "var(--spacing-sm) var(--spacing-md)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "8px",
-    fontSize: "1rem",
-    minHeight: "var(--min-touch-target)",
-    boxSizing: "border-box" as const,
-    marginBottom: "var(--spacing-sm)",
-    background: "var(--color-bg)",
-    color: "var(--color-text)",
-  },
-  inlineError: {
-    fontSize: "0.82rem",
-    color: "#ef4444",
-    marginBottom: "var(--spacing-sm)",
-  },
-  statusMsg: {
-    fontSize: "0.88rem",
-    color: "var(--color-text-secondary)",
-    marginBottom: "var(--spacing-sm)",
-  },
-  successBox: {
-    textAlign: "center" as const,
-    padding: "var(--spacing-lg) 0",
-  },
-  modalActions: {
-    display: "flex",
-    gap: "var(--spacing-md)",
-    marginTop: "var(--spacing-md)",
-    justifyContent: "flex-end",
-  },
-  cancelBtn: {
-    padding: "var(--spacing-sm) var(--spacing-lg)",
-    background: "var(--color-bg-secondary)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "8px",
-    fontWeight: 600,
-    minHeight: "var(--min-touch-target)",
-    cursor: "pointer",
-    color: "var(--color-text)",
-  },
-  tipBtn: {
-    padding: "var(--spacing-sm) var(--spacing-lg)",
-    background: "var(--color-primary)",
-    border: "none",
-    borderRadius: "8px",
-    fontWeight: 600,
-    minHeight: "var(--min-touch-target)",
-    cursor: "pointer",
-    color: "white",
-  },
-  deleteConfirmBtn: {
-    padding: "var(--spacing-sm) var(--spacing-lg)",
-    background: "#ef4444",
-    border: "none",
-    borderRadius: "8px",
-    fontWeight: 600,
-    minHeight: "var(--min-touch-target)",
-    cursor: "pointer",
-    color: "white",
-  },
-  /* ── Skeleton / empty ─────────────────────────────────────────────────── */
-  skeleton: {
-    height: "120px",
-    borderRadius: "12px",
-    background: "var(--color-bg-secondary)",
-    marginBottom: "var(--spacing-md)",
-  },
-  emptyState: {
-    textAlign: "center" as const,
-    padding: "var(--spacing-xl)",
-    background: "var(--color-bg)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "12px",
-  },
-  emptyTitle: {
-    fontWeight: 600,
-    fontSize: "1.1rem",
-    marginBottom: "var(--spacing-sm)",
-    marginTop: "var(--spacing-sm)",
-  },
-  emptyDesc: {
-    color: "var(--color-text-secondary)",
-    fontSize: "0.9rem",
-  },
-};

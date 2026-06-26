@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useNotifications, Notification } from "@/hooks/useNotifications";
 import { useWalletContext } from "@/components/WalletProvider";
 
@@ -8,18 +9,40 @@ function truncateAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-function buildMessage(notification: Notification): string {
+function buildMessage(notification: Notification): React.ReactNode {
   const actor = truncateAddress(notification.actor);
-  const { type, postId, amountXlm, excerpt } = notification;
-  const postRef = excerpt ? `"${excerpt}"` : postId !== undefined ? `post #${postId}` : "a post";
+  const { type, postId, proposalId, parameter, amountXlm, excerpt } = notification;
+
+  const actorLink = (
+    <Link href={`/profile/${notification.actor}`} className="font-medium text-violet-400 hover:underline">
+      @{actor}
+    </Link>
+  );
+
+  const postRef = (
+    <Link href={postId !== undefined ? `/posts/${postId}` : "#"} className="font-medium text-violet-400 hover:underline">
+      {excerpt ? `"${excerpt}"` : postId !== undefined ? `post #${postId}` : "a post"}
+    </Link>
+  );
 
   switch (type) {
     case "follow":
-      return `@${actor} started following you`;
+      return <>{actorLink} started following you</>;
     case "like":
-      return `@${actor} liked your post — ${postRef}`;
+      return <>{actorLink} liked your post — {postRef}</>;
     case "tip":
-      return `@${actor} tipped ${amountXlm ?? "?"} XLM on ${postRef}`;
+      return <>{actorLink} tipped {amountXlm ?? "?"} XLM on {postRef}</>;
+    case "governance":
+      return (
+        <>
+          {actorLink} {parameter ? `executed proposal for ${parameter}` : "created a new governance proposal"} —{" "}
+          <Link href="/governance" className="font-medium text-violet-400 hover:underline">
+            view proposal #{proposalId}
+          </Link>
+        </>
+      );
+    default:
+      return "Unknown notification";
   }
 }
 

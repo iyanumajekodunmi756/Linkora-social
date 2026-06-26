@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import * as Haptics from "expo-haptics";
 import {
   GestureResponderEvent,
   Pressable,
@@ -97,6 +98,7 @@ export function PostCard(props: PostCardProps) {
 
   const handleLikePress = (event: GestureResponderEvent) => {
     event.stopPropagation();
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     void like();
   };
 

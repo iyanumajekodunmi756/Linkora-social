@@ -1,6 +1,12 @@
 import { Pool } from "pg";
 
-export type NotificationEventType = "FOLLOW" | "TIP_RECEIVED" | "LIKE_RECEIVED";
+export type NotificationEventType =
+  | "FOLLOW"
+  | "TIP_RECEIVED"
+  | "LIKE_RECEIVED"
+  | "POST_REPORTED"
+  | "REPORT_DISMISSED"
+  | "POST_REMOVED_BY_MODERATION";
 
 export interface DeviceTokenRecord {
   address: string;
@@ -12,6 +18,7 @@ export interface DeviceTokenRecord {
 export interface DeviceTokenStore {
   register(address: string, token: string, platform: string): Promise<void>;
   getToken(address: string): Promise<string | null>;
+  removeToken(address: string): Promise<void>;
 }
 
 export interface NotificationDispatchOptions {
@@ -46,6 +53,14 @@ export class NotificationService {
 
   async getDeviceToken(address: string): Promise<string | null> {
     return this.deviceTokenStore.getToken(address);
+  }
+
+  async deregisterDeviceToken(address: string): Promise<void> {
+    if (!address) {
+      return;
+    }
+
+    await this.deviceTokenStore.removeToken(address);
   }
 
   async dispatchEventNotification(options: NotificationDispatchOptions): Promise<boolean> {
@@ -93,6 +108,12 @@ export class NotificationService {
         return "Tip received";
       case "LIKE_RECEIVED":
         return "Your post was liked";
+      case "POST_REPORTED":
+        return "Your post was reported";
+      case "REPORT_DISMISSED":
+        return "Report dismissed";
+      case "POST_REMOVED_BY_MODERATION":
+        return "Post removed by moderation";
       default:
         return "Linkora update";
     }
@@ -110,6 +131,12 @@ export class NotificationService {
         return `You received a tip${payload?.postId ? ` on post ${String(payload.postId)}` : ""}`;
       case "LIKE_RECEIVED":
         return `A user liked your post${payload?.postId ? ` ${String(payload.postId)}` : ""}`;
+      case "POST_REPORTED":
+        return `Your post was reported${payload?.reason ? ` for: ${String(payload.reason)}` : ""}`;
+      case "REPORT_DISMISSED":
+        return `Your report was dismissed${payload?.moderatorNotes ? `: ${String(payload.moderatorNotes)}` : ""}`;
+      case "POST_REMOVED_BY_MODERATION":
+        return `Your post was removed by moderation${payload?.reason ? `: ${String(payload.reason)}` : ""}`;
       default:
         return "You have a new notification";
     }
@@ -134,6 +161,10 @@ export class MemoryDeviceTokenStore implements DeviceTokenStore {
 
   async getToken(address: string): Promise<string | null> {
     return this.deviceTokens.get(address)?.token ?? null;
+  }
+
+  async removeToken(address: string): Promise<void> {
+    this.deviceTokens.delete(address);
   }
 }
 
@@ -166,6 +197,16 @@ export class PostgresDeviceTokenStore implements DeviceTokenStore {
     );
 
     return (res.rows[0]?.token as string | undefined) ?? null;
+  }
+
+  async removeToken(address: string): Promise<void> {
+    await this.pool.query(
+      `
+      DELETE FROM device_tokens
+      WHERE address = $1
+      `,
+      [address]
+    );
   }
 }
 

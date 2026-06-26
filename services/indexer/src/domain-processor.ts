@@ -14,7 +14,19 @@ import { IngestEvent, QueryResultLike } from "./pipeline";
 import { handleFollow } from "./handlers/follow";
 import { handleTip } from "./handlers/tip";
 import { handleLike } from "./handlers/like";
+import {
+  handleGovProposalCreated,
+  handleGovVote,
+  handleGovProposalExecuted,
+  handleGovProposalVetoed,
+} from "./handlers/governance";
+import {
+  handlePostReported,
+  handleReportDismissed,
+  handlePostRemovedByModeration,
+} from "./handlers/moderation";
 import { dispatchNotificationForBusEvent } from "./notifications/events";
+import { scValToNative, xdr } from "@stellar/stellar-sdk";
 
 const TOPIC_FOLLOW = "follow";
 const TOPIC_UNFOLLOW = "unfollow";
@@ -22,6 +34,9 @@ const TOPIC_TIP = "tip";
 const TOPIC_TIP_RECEIVED = "tip_received";
 const TOPIC_LIKE = "like";
 const TOPIC_LIKE_RECEIVED = "like_received";
+const TOPIC_POST_REPORTED = "post_reported";
+const TOPIC_REPORT_DISMISSED = "report_dismissed";
+const TOPIC_POST_REMOVED_BY_MODERATION = "post_removed_by_moderation";
 
 function toBusEvent(ev: IngestEvent): import("./bus").BusEvent {
   return {
@@ -44,13 +59,70 @@ function asString(value: unknown): string {
   return String(value ?? "");
 }
 
+function decodeScVal(encoded: string): unknown {
+  try {
+    return scValToNative(xdr.ScVal.fromXDR(encoded, "base64"));
+  } catch {
+    return encoded;
+  }
+}
+
+function decodeTopics(topics: string[]): unknown[] {
+  const decoded: unknown[] = [];
+  for (const topic of topics) {
+    try {
+      decoded.push(decodeScVal(topic));
+    } catch {
+      decoded.push(topic);
+    }
+  }
+  return decoded;
+}
+
+function decodeData(data: unknown): Record<string, unknown> {
+  const encoded =
+    typeof data === "string"
+      ? data
+      : data && typeof data === "object" && "value" in data
+        ? (data as { value?: unknown }).value
+        : undefined;
+
+  if (typeof encoded !== "string") {
+    return {};
+  }
+
+  try {
+    const decoded = decodeScVal(encoded);
+    if (decoded && typeof decoded === "object" && !Array.isArray(decoded)) {
+      return decoded as Record<string, unknown>;
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+}
+
 export function createDomainProcessor(
   pool: { query: (sql: string, params?: unknown[]) => Promise<QueryResultLike> },
-  notificationService: import("./notifications/service").NotificationService
+  notificationService: import("./notifications/service").NotificationService,
+  db?: Database
 ): (client: PgClientLike, event: IngestEvent) => Promise<void> {
   return async (client: PgClientLike, event: IngestEvent): Promise<void> => {
-    const data = event.data as Record<string, unknown>;
-    const topic = (event.topic[0] ?? "").toLowerCase();
+    // Decode topics and data so they work with both real RPC XDR and unit test JS objects
+    const decodedTopics = decodeTopics(event.topic);
+    let data = decodeData(event.data);
+    if (Object.keys(data).length === 0 && event.data && typeof event.data === "object") {
+      data = event.data as Record<string, unknown>;
+    }
+    // merge any object topics
+    for (const t of decodedTopics) {
+      if (t && typeof t === "object" && !Array.isArray(t)) {
+        Object.assign(data, t);
+      }
+    }
+
+    const topic = (typeof decodedTopics[0] === "string" ? decodedTopics[0] : "").toLowerCase();
     const busEvent = toBusEvent(event);
 
     switch (topic) {
@@ -127,8 +199,137 @@ export function createDomainProcessor(
         break;
       }
 
+      case "gov_proposal_created": {
+        const proposalId = asBigInt(data.proposal_id);
+        const proposer = asString(data.proposer);
+        const parameter = asString(data.parameter);
+        const newValue = asBigInt(data.new_value);
+
+        await handleGovProposalCreated(client as never, {
+          proposal_id: proposalId,
+          proposer,
+          parameter,
+          new_value: newValue,
+          ledger: event.ledgerSequence,
+        });
+        break;
+      }
+
+      case "gov_vote": {
+        const proposalId = asBigInt(data.proposal_id);
+        const voter = asString(data.voter);
+        const support = Boolean(data.support);
+
+        await handleGovVote(client as never, {
+          proposal_id: proposalId,
+          voter,
+          support,
+          ledger: event.ledgerSequence,
+        });
+        break;
+      }
+
+      case "gov_proposal_executed": {
+        const proposalId = asBigInt(data.proposal_id);
+        const parameter = asString(data.parameter);
+        const newValue = asBigInt(data.new_value);
+
+        await handleGovProposalExecuted(client as never, {
+          proposal_id: proposalId,
+          parameter,
+          new_value: newValue,
+          ledger: event.ledgerSequence,
+        });
+        break;
+      }
+
+      case "gov_proposal_vetoed": {
+        const proposalId = asBigInt(data.proposal_id);
+
+        await handleGovProposalVetoed(client as never, {
+          proposal_id: proposalId,
+          ledger: event.ledgerSequence,
+        });
+        break;
+      }
+
+      case TOPIC_POST_REPORTED: {
+        const postId = asBigInt(data.post_id);
+        const reporterAddress = asString(data.reporter_address ?? data.reporter);
+        const reason = asString(data.reason);
+
+        await handlePostReported(
+          client as never,
+          {
+            post_id: postId,
+            reporter_address: reporterAddress,
+            reason,
+          },
+          {
+            txHash: asString(data.txHash ?? data.tx_hash),
+            ledgerSeq: event.ledgerSequence,
+            timestamp: new Date(),
+          },
+          pool as never
+        );
+
+        await dispatchNotificationForBusEvent(pool as never, notificationService, busEvent);
+        break;
+      }
+
+      case TOPIC_REPORT_DISMISSED: {
+        const postId = asBigInt(data.post_id);
+        const reporterAddress = asString(data.reporter_address ?? data.reporter);
+        const moderatorAddress = asString(data.moderator_address ?? data.moderator);
+        const moderatorNotes = asString(data.moderator_notes);
+
+        await handleReportDismissed(
+          client as never,
+          {
+            post_id: postId,
+            reporter_address: reporterAddress,
+            moderator_address: moderatorAddress,
+            moderator_notes: moderatorNotes || undefined,
+          },
+          {
+            txHash: asString(data.txHash ?? data.tx_hash),
+            ledgerSeq: event.ledgerSequence,
+            timestamp: new Date(),
+          },
+          pool as never
+        );
+
+        await dispatchNotificationForBusEvent(pool as never, notificationService, busEvent);
+        break;
+      }
+
+      case TOPIC_POST_REMOVED_BY_MODERATION: {
+        const postId = asBigInt(data.post_id);
+        const moderatorAddress = asString(data.moderator_address ?? data.moderator);
+        const reason = asString(data.reason);
+
+        await handlePostRemovedByModeration(
+          client as never,
+          {
+            post_id: postId,
+            moderator_address: moderatorAddress,
+            reason,
+          },
+          {
+            txHash: asString(data.txHash ?? data.tx_hash),
+            ledgerSeq: event.ledgerSequence,
+            timestamp: new Date(),
+          },
+          pool as never
+        );
+
+        await dispatchNotificationForBusEvent(pool as never, notificationService, busEvent);
+        break;
+      }
+
       default:
         break;
     }
   };
 }
+

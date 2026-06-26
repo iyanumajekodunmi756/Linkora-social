@@ -93,6 +93,7 @@ export function NotificationsSection() {
                 }`}
                 role="switch"
                 aria-checked={settings.browserPushEnabled}
+                aria-label="Toggle Browser Push Notifications"
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
