@@ -533,6 +533,246 @@ fn test_tip_non_blocked_user() {
     assert_eq!(post.tip_total, 500);
 }
 
+// ── Issue #722: strengthen coverage that block_user prevents tipping ──────
+//
+// The existing test_tip_blocked_by_author asserts only that the call panics
+// with "blocked". These three tests pin down additional invariants and edge
+// cases that the basic test does not directly assert.
+
+// (A) A blocked tip attempt must leave *no* half-committed state. The panic
+//     must fire before any token movement, fee accounting, tip_total update,
+//     or cooldown write. Use try_tip so we can inspect post-state after the
+//     failed call.
+#[test]
+fn test_tip_block_preserves_no_state_changes_on_panic() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LinkoraContract, ());
+    let client = LinkoraContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let author = Address::generate(&env);
+    let tipper = Address::generate(&env);
+
+    client.initialize(&admin, &treasury, &250);
+
+    let token = setup_token(&env, &tipper);
+    let post_id = client.create_post(
+        &author,
+        &String::from_str(&env, "block-prevented tip post"),
+    );
+
+    // Author blocks tipper.
+    client.block_user(&author, &tipper);
+
+    // Snapshot every pre-state we care about so the post-state assertions are
+    // explicit (rather than just trusting Soroban's try_* rollback semantics).
+    let token_client = TokenClient::new(&env, &token);
+    let tipper_balance_before = token_client.balance(&tipper);
+    let author_balance_before = token_client.balance(&author);
+    let treasury_balance_before = token_client.balance(&treasury);
+    let post_before = client.get_post(&post_id).unwrap();
+    let tip_total_before = post_before.tip_total;
+
+    // Blocked tip attempt — must be rejected.
+    let result = client.try_tip(&tipper, &post_id, &token, &1_000);
+    assert!(result.is_err(), "blocked tip must return Err");
+
+    // No state changes must have been committed by the failed call frame.
+    assert_eq!(
+        token_client.balance(&tipper),
+        tipper_balance_before,
+        "tipper balance must be unchanged after a blocked tip"
+    );
+    assert_eq!(
+        token_client.balance(&author),
+        author_balance_before,
+        "author balance must be unchanged after a blocked tip"
+    );
+    assert_eq!(
+        token_client.balance(&treasury),
+        treasury_balance_before,
+        "treasury must not collect a fee for a blocked tip"
+    );
+    assert_eq!(
+        client.get_post(&post_id).unwrap().tip_total,
+        tip_total_before,
+        "post.tip_total must not be incremented for a blocked tip"
+    );
+    // The blocked relationship must remain intact (the block map must not be
+    // corrupted by the failed attempt).
+    assert!(
+        client.is_blocked(&author, &tipper),
+        "blocked relationship must persist after a rejected tip attempt"
+    );
+
+    // End-to-end cooldown-not-consumed check: a blocked tip attempt must NOT
+    // burn the per-(post, tipper) cooldown. The `tip` function panics with
+    // "blocked" *before* writing the TipCooldown key, so an unblocked
+    // re-attempt on the same ledger must succeed. If the blocked attempt had
+    // written the cooldown, this would panic with "tip cooldown not expired"
+    // (the default TIP_COOLDOWN_LEDGERS is 17,280).
+    //
+    // This invariant is what makes test_tip_after_unblock work, but no
+    // existing test pins it down directly.
+    client.unblock_user(&author, &tipper);
+    client.tip(&tipper, &post_id, &token, &1);
+
+    let post_after_unblock = client.get_post(&post_id).unwrap();
+    assert_eq!(
+        post_after_unblock.tip_total, 1,
+        "tip after a previously-blocked-then-unblocked attempt must succeed"
+    );
+}
+
+// (B) Blocking must be unidirectional. If A blocks B (B is restricted), the
+//     block must NOT also restrict A's interactions toward B — A must still
+//     be able to tip B's posts and B must still receive that tip income.
+//     This guards against an accidentally-symmetric block implementation.
+#[test]
+fn test_tip_block_is_unidirectional_blocker_can_still_tip_blocked() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LinkoraContract, ());
+    let client = LinkoraContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let blocked_user = Address::generate(&env); // "B" — restricted by blocker
+    let blocker = Address::generate(&env); // "A" — the blocker
+
+    client.initialize(&admin, &treasury, &250);
+
+    // A blocks B (B is restricted).
+    client.block_user(&blocker, &blocked_user);
+
+    // `blocker` holds tokens; mint extra to `blocked_user` so B can also
+    // receive tips on B's own post.
+    let token = setup_token(&env, &blocker);
+    StellarAssetClient::new(&env, &token).mint(&blocked_user, &10_000);
+
+    let post_id = client.create_post(
+        &blocked_user,
+        &String::from_str(&env, "blocked_user is the author here"),
+    );
+
+    // The blocker (A) tips the blocked_user's (B) post — must succeed because
+    // the contract checks is_blocked(post.author=blocked_user, tipper=blocker),
+    // and blocked_user has not blocked anyone.
+    client.tip(&blocker, &post_id, &token, &1_000);
+
+    // Standard 2.5% fee: fee = 25, author gets 975.
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.balance(&treasury),
+        25,
+        "treasury receives the fee on the blocker's tip"
+    );
+    assert_eq!(
+        token_client.balance(&blocked_user),
+        975,
+        "blocked_user (the author) still receives their share of the tip"
+    );
+
+    let post = client.get_post(&post_id).unwrap();
+    assert_eq!(
+        post.tip_total, 1_000,
+        "tip_total accumulates even though blocked_user is on someone else's block list"
+    );
+}
+
+// (C) Author blocks two distinct addresses. Each blocked tipper's tip must
+//     panic independently (no overwriting on the second block_user call, no
+//     shared state between entries in the block map). An unrelated unblocked
+//     tipper must still be able to tip the same post.
+#[test]
+fn test_tip_block_multiple_blocked_tippers_panic_independently() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LinkoraContract, ());
+    let client = LinkoraContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let author = Address::generate(&env);
+    let blocked_a = Address::generate(&env);
+    let blocked_b = Address::generate(&env);
+    let unblocked = Address::generate(&env);
+
+    client.initialize(&admin, &treasury, &250);
+
+    // `setup_token` mints 10,000 to `blocked_a`; mint extra to the other
+    // addresses so they all have funds to tip.
+    let token = setup_token(&env, &blocked_a);
+    StellarAssetClient::new(&env, &token).mint(&blocked_b, &5_000);
+    StellarAssetClient::new(&env, &token).mint(&unblocked, &10_000);
+
+    let post_id = client.create_post(&author, &String::from_str(&env, "multi-block post"));
+
+    // Author blocks two different addresses.
+    client.block_user(&author, &blocked_a);
+    client.block_user(&author, &blocked_b);
+
+    // Each blocked user independently fails on the same post.
+    let r_a = client.try_tip(&blocked_a, &post_id, &token, &1_000);
+    assert!(
+        r_a.is_err(),
+        "first blocked tipper must be rejected"
+    );
+    let r_b = client.try_tip(&blocked_b, &post_id, &token, &1_000);
+    assert!(
+        r_b.is_err(),
+        "second blocked tipper must be rejected"
+    );
+
+    // An unrelated, unblocked tipper succeeds and pays the fee.
+    client.tip(&unblocked, &post_id, &token, &500);
+
+    // Only the unblocked tipper's contribution is recorded.
+    let post = client.get_post(&post_id).unwrap();
+    assert_eq!(
+        post.tip_total, 500,
+        "only the unblocked tipper's tip contributes to tip_total"
+    );
+
+    // No state mutations from the blocked attempts.
+    let token_client = TokenClient::new(&env, &token);
+    assert_eq!(
+        token_client.balance(&blocked_a),
+        10_000,
+        "first blocked tipper's balance must be untouched"
+    );
+    assert_eq!(
+        token_client.balance(&blocked_b),
+        5_000,
+        "second blocked tipper's balance must be untouched"
+    );
+    // Unblocked tipper pays the full tip amount; treasury + author split:
+    //   fee = 500 * 250 / 10_000 = 12  (i128 integer division truncates)
+    //   author receives 500 - 12 = 488
+    let fee: i128 = 12;
+    let author_amount: i128 = 488;
+    assert_eq!(
+        token_client.balance(&unblocked),
+        10_000 - 500,
+        "unblocked tipper pays the full tip amount"
+    );
+    assert_eq!(
+        token_client.balance(&treasury),
+        fee,
+        "treasury receives the fee from the unblocked tipper only"
+    );
+    assert_eq!(
+        token_client.balance(&author),
+        author_amount,
+        "author receives their share from the unblocked tipper only"
+    );
+}
+
 #[test]
 fn test_profile_count() {
     let env = Env::default();
